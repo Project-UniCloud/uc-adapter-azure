@@ -9,6 +9,7 @@ To jest odpowiednik AWS-owego IAM GroupManager:
 - pobieranie informacji o grupie
 """
 
+import time
 from typing import Optional, List, Dict
 
 from msgraph.core import GraphClient
@@ -89,22 +90,67 @@ class AzureGroupManager:
 
     # ========= CZŁONKOSTWO =========
 
-    def add_member(self, group_id: str, user_id: str) -> None:
+    def add_member(
+        self,
+        group_id: str,
+        user_id: str,
+        retries: int = 5,
+        delay: float = 3.0,
+    ) -> None:
         """
-        Dodaje użytkownika do grupy.
+        Dodaje użytkownika do grupy z prostym mechanizmem retry na wypadek
+        opóźnionej replikacji katalogu (częste 404 Request_ResourceNotFound
+        tuż po utworzeniu grupy lub użytkownika).
 
         Implementacja zgodna z API Graph:
         POST /groups/{group_id}/members/$ref
         body: { "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/{user_id}" }
+
+        :param group_id: GUID grupy
+        :param user_id: GUID użytkownika (taki, jaki zwraca AzureUserManager.create_user)
+        :param retries: ile razy ponawiać próbę po 404
+        :param delay: opóźnienie (w sekundach) między próbami
         """
         ref = {
             "@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{user_id}"
         }
 
-        resp = self._graph.post(f"/groups/{group_id}/members/$ref", json=ref)
-        # 204 No Content oznacza OK
-        if resp.status_code not in (204, 201):
+        last_resp = None
+
+        for attempt in range(1, retries + 1):
+            resp = self._graph.post(f"/groups/{group_id}/members/$ref", json=ref)
+
+            if resp.status_code in (204, 201):
+                # Dodano pomyślnie
+                return
+
+            if resp.status_code == 404:
+                # Typowy przypadek: katalog jeszcze się nie zreplikował
+                last_resp = resp
+                print(
+                    f"[AzureGroupManager.add_member] 404 ResourceNotFound dla group_id={group_id} "
+                    f"(attempt {attempt}/{retries}) – czekam {delay}s..."
+                )
+                time.sleep(delay)
+                continue
+
+            # Inne błędy traktujemy od razu jako poważne
+            print(
+                "[AzureGroupManager.add_member] ERROR:",
+                resp.status_code,
+                resp.text,
+            )
             resp.raise_for_status()
+
+        # Po wszystkich próbach nadal 404 – logujemy szczegóły i wywalamy wyjątek
+        if last_resp is not None:
+            print("[AzureGroupManager.add_member] FAILED po wielu próbach. Odpowiedź Graph:")
+            print("  status:", last_resp.status_code)
+            try:
+                print("  body:", last_resp.json())
+            except Exception:
+                print("  raw body:", last_resp.text)
+            last_resp.raise_for_status()
 
     def remove_member(self, group_id: str, user_id: str) -> None:
         """
@@ -120,6 +166,7 @@ class AzureGroupManager:
     def list_members(self, group_id: str) -> List[Dict]:
         """
         Zwraca listę członków grupy (każdy element to dict z danymi directoryObject).
+
         Uwaga: dla dużych grup trzeba by dodać obsługę @odata.nextLink.
         """
         members: List[Dict] = []

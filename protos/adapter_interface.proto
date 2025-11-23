@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package adapter;
+
+// === CloudAdapter Service Definition ===
+service CloudAdapter {
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+  rpc CreateGroupWithLeaders(CreateGroupWithLeadersRequest) returns (GroupCreatedResponse);
+  rpc CreateUsersForGroup(CreateUsersForGroupRequest) returns (CreateUsersForGroupResponse);
+  rpc GroupExists(GroupExistsRequest) returns (GroupExistsResponse);
+  rpc GetTotalCostForGroup(CostRequest) returns (CostResponse);
+  rpc GetTotalCostsForAllGroups(CostRequest) returns (AllGroupsCostResponse);
+  rpc GetTotalCost(CostRequest) returns (CostResponse);
+  rpc GetGroupCostWithServiceBreakdown(GroupServiceBreakdownRequest) returns (GroupServiceBreakdownResponse);
+}
+
+// === Health Check ===
+message StatusRequest {}
+
+message StatusResponse {
+  bool isHealthy = 1;
+}
+
+// === Group Management ===
+message CreateGroupWithLeadersRequest {
+  string resourceType = 1;
+  repeated string leaders = 2;
+  string groupName = 3;
+}
+
+message GroupCreatedResponse {
+  string groupName = 1;
+}
+
+message CreateUsersForGroupRequest {
+  repeated string users = 1;
+  string groupName = 2;
+}
+
+message CreateUsersForGroupResponse {
+  string message = 1;
+}
+
+message GroupExistsRequest {
+  string groupName = 1;
+}
+
+message GroupExistsResponse {
+  bool exists = 1;
+}
+
+// === Cost Queries ===
+message CostRequest {
+  string startDate = 1;
+  string endDate = 2;
+  string groupName = 3;
+}
+
+message CostResponse {
+  double amount = 1;
+}
+
+message GroupCost {
+  string groupName = 1;
+  double amount = 2;
+}
+
+message AllGroupsCostResponse {
+  repeated GroupCost groupCosts = 1;
+}
+
+// === Detailed Breakdown ===
+message GroupServiceBreakdownRequest {
+  string groupName = 1;
+  string startDate = 2;
+  string endDate = 3;
+}
+
+message ServiceCost {
+  string serviceName = 1;
+  double amount = 2;
+}
+
+message GroupServiceBreakdownResponse {
+  double total = 1;
+  repeated ServiceCost breakdown = 2;
+}

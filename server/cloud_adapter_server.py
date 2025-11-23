@@ -1,4 +1,4 @@
-# main.py
+# server/cloud_adapter_server.py
 
 from concurrent import futures
 from typing import List
@@ -13,15 +13,35 @@ from protos import adapter_interface_pb2_grpc as pb2_grpc
 
 
 class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
+    """
+    Implementacja serwisu gRPC dla adaptera Azure.
+
+    To jest odpowiednik AWS-owego CloudAdapterServicer, ale oparty
+    o AzureUserManager i AzureGroupManager.
+    """
+
     def __init__(self) -> None:
         self.user_manager = AzureUserManager()
         self.group_manager = AzureGroupManager()
 
+    # ========= RPC: CreateUsersForGroup =========
+
     def CreateUsersForGroup(self, request, context):
+        """
+        Tworzy wielu użytkowników i dodaje ich do istniejącej grupy.
+
+        request:
+          - groupName: nazwa istniejącej grupy w Entra ID
+          - users: repeated string – loginy użytkowników (bez domeny)
+
+        response:
+          - message: prosty komunikat tekstowy
+        """
         group_name: str = request.groupName
         users: List[str] = list(request.users)
 
         try:
+            # 1. Sprawdź, czy grupa istnieje
             group = self.group_manager.get_group_by_name(group_name)
             if not group:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
@@ -31,32 +51,36 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 return pb2.CreateUsersForGroupResponse()
 
             group_id = group["id"]
-            created: List[tuple[str, str]] = []
 
+            created: List[tuple[str, str]] = []  # (login, user_id) do rollbacku
+
+            # 2. Tworzenie użytkowników + dodawanie do grupy
             for login in users:
-                # Tworzymy użytkownika z domyślnym hasłem z AzureUserManager
+                # 2.1 utworzenie użytkownika
                 try:
                     user_id = self.user_manager.create_user(
                         login=login,
                         display_name=login,
+                        initial_password=group_name,  # analog do AWS – hasło = nazwa grupy
                     )
                 except Exception as e:
-                    # rollback utworzonych do tej pory użytkowników
+                    # rollback – usuń już utworzonych użytkowników
                     for created_login, _uid in created:
                         try:
                             self.user_manager.delete_user(created_login)
                         except Exception:
+                            # tutaj tylko logujemy – nie przerywamy kolejnych prób rollbacku
                             print(
                                 f"[CreateUsersForGroup] rollback delete_user({created_login}) failed"
                             )
                     print(f"[CreateUsersForGroup] create_user({login}) failed: {e}")
                     raise
 
-                # Dodajemy do grupy
+                # 2.2 dodanie do grupy
                 try:
                     self.group_manager.add_member(group_id, user_id)
                 except Exception as e:
-                    # rollback bieżącego i wszystkich poprzednich
+                    # rollback – usuń bieżącego i wszystkich dotychczas utworzonych
                     try:
                         self.user_manager.delete_user(login)
                     except Exception:
@@ -77,6 +101,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
                 created.append((login, user_id))
 
+            # 3. Sukces – budujemy odpowiedź
             response = pb2.CreateUsersForGroupResponse()
             response.message = (
                 f"Created {len(users)} users in group '{group_name}' (Azure AD)."
@@ -89,23 +114,39 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(str(e))
             return pb2.CreateUsersForGroupResponse()
 
+    # ========= RPC: CreateGroupWithLeaders =========
+
     def CreateGroupWithLeaders(self, request, context):
+        """
+        Tworzy grupę oraz użytkowników-liderów i dodaje ich do tej grupy.
+
+        request:
+          - groupName: nazwa tworzonej grupy
+          - leaders: repeated string – loginy liderów
+
+        response:
+          - groupName: nazwa utworzonej grupy
+        """
         group_name: str = request.groupName
         leaders: List[str] = list(request.leaders)
 
         try:
+            # 1. Tworzenie grupy
             group_id = self.group_manager.create_group(name=group_name)
-            created_leaders: List[tuple[str, str]] = []
 
+            created_leaders: List[tuple[str, str]] = []  # (login, user_id)
+
+            # 2. Tworzenie liderów + przypisanie do grupy
             for leader_login in leaders:
-                # Tworzymy lidera z domyślnym hasłem z AzureUserManager
+                # 2.1 utworzenie użytkownika
                 try:
                     leader_id = self.user_manager.create_user(
                         login=leader_login,
                         display_name=leader_login,
+                        initial_password=group_name,
                     )
                 except Exception as e:
-                    # rollback liderów + grupy
+                    # rollback – usuń dotychczasowych liderów + grupę
                     for login, _uid in created_leaders:
                         try:
                             self.user_manager.delete_user(login)
@@ -124,11 +165,11 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                     )
                     raise
 
-                # Dodajemy lidera do grupy
+                # 2.2 dodanie lidera do grupy
                 try:
                     self.group_manager.add_member(group_id, leader_id)
                 except Exception as e:
-                    # rollback bieżącego lidera, wcześniejszych liderów i grupy
+                    # rollback – usuń bieżącego lidera, wcześniejszych liderów i grupę
                     try:
                         self.user_manager.delete_user(leader_login)
                     except Exception:
@@ -155,6 +196,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
                 created_leaders.append((leader_login, leader_id))
 
+            # 3. Sukces
             response = pb2.GroupCreatedResponse()
             response.groupName = group_name
             return response
@@ -166,7 +208,10 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             return pb2.GroupCreatedResponse()
 
 
-def main() -> None:
+def serve(port: int = 50051) -> None:
+    """
+    Tworzy i uruchamia serwer gRPC adaptera Azure.
+    """
     validate_config()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
@@ -174,11 +219,7 @@ def main() -> None:
         CloudAdapterServicer(),
         server,
     )
-    server.add_insecure_port("[::]:50051")
+    server.add_insecure_port(f"[::]:{port}")
     server.start()
-    print("[AzureAdapter] gRPC server started on port 50051")
+    print(f"[AzureAdapter] gRPC server started on port {port}")
     server.wait_for_termination()
-
-
-if __name__ == "__main__":
-    main()
