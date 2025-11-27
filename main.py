@@ -16,8 +16,44 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def __init__(self) -> None:
         self.user_manager = AzureUserManager()
         self.group_manager = AzureGroupManager()
+        # docelowo tutaj dodajemy LimitManager od kosztów
+
+    # ========== GetStatus ==========
+
+    def GetStatus(self, request, context):
+        resp = pb2.StatusResponse()
+        resp.isHealthy = True
+        return resp
+
+    # ========== GroupExists ==========
+
+    def GroupExists(self, request, context):
+        """
+        Sprawdza, czy grupa o podanej nazwie istnieje w Entra ID.
+        """
+        group_name: str = request.groupName
+
+        try:
+            group = self.group_manager.get_group_by_name(group_name)
+            resp = pb2.GroupExistsResponse()
+            resp.exists = group is not None
+            return resp
+        except Exception as e:
+            print(f"[GroupExists] Error: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GroupExistsResponse()
+
+    # ========== CreateUsersForGroup ==========
 
     def CreateUsersForGroup(self, request, context):
+        """
+        Tworzy użytkowników i dodaje ich do istniejącej grupy.
+
+        request:
+          - groupName: nazwa grupy w Entra ID
+          - users: repeated string (loginy użytkowników)
+        """
         group_name: str = request.groupName
         users: List[str] = list(request.users)
 
@@ -89,7 +125,12 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(str(e))
             return pb2.CreateUsersForGroupResponse()
 
+    # ========== CreateGroupWithLeaders ==========
+
     def CreateGroupWithLeaders(self, request, context):
+        """
+        Tworzy grupę + liderów, zapisuje ich jako członków grupy.
+        """
         group_name: str = request.groupName
         leaders: List[str] = list(request.leaders)
 
@@ -165,20 +206,81 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(str(e))
             return pb2.GroupCreatedResponse()
 
+    # ========== Metody kosztowe – na razie atrapy ==========
 
-def main() -> None:
-    validate_config()
+    def GetTotalCostForGroup(self, request, context):
+        """
+        Zwraca koszt grupy za zadany okres.
+        Na razie atrapa – zawsze 0.0 (do późniejszej integracji z Azure Cost Management).
+        """
+        try:
+            resp = pb2.CostResponse()
+            resp.amount = 0.0
+            return resp
+        except Exception as e:
+            print(f"[GetTotalCostForGroup] Error: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.CostResponse()
+
+    def GetTotalCostsForAllGroups(self, request, context):
+        """
+        Zwraca koszty wszystkich grup.
+        Na razie atrapa – pusta lista.
+        """
+        try:
+            resp = pb2.AllGroupsCostResponse()
+            # docelowo tutaj wypełnimy resp.groupCosts
+            return resp
+        except Exception as e:
+            print(f"[GetTotalCostsForAllGroups] Error: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.AllGroupsCostResponse()
+
+    def GetTotalCost(self, request, context):
+        """
+        Całkowity koszt subskrypcji.
+        Na razie atrapa – 0.0.
+        """
+        try:
+            resp = pb2.CostResponse()
+            resp.amount = 0.0
+            return resp
+        except Exception as e:
+            print(f"[GetTotalCost] Error: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.CostResponse()
+
+    def GetGroupCostWithServiceBreakdown(self, request, context):
+        """
+        Koszt grupy z podziałem na usługi.
+        Na razie atrapa – total = 0.0, brak breakdown.
+        """
+        try:
+            resp = pb2.GroupServiceBreakdownResponse()
+            resp.total = 0.0
+            # resp.breakdown pozostaje puste
+            return resp
+        except Exception as e:
+            print(f"[GetGroupCostWithServiceBreakdown] Error: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GroupServiceBreakdownResponse()
+
+
+def serve():
+    validate_config()  # sprawdzi zmienne środowiskowe
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    pb2_grpc.add_CloudAdapterServicer_to_server(
-        CloudAdapterServicer(),
-        server,
-    )
-    server.add_insecure_port("[::]:50051")
+    pb2_grpc.add_CloudAdapterServicer_to_server(CloudAdapterServicer(), server)
+    # port możesz zostawić 50053 albo dostosować do backendu
+    server.add_insecure_port("[::]:50053")
+    print("[AzureAdapter] gRPC server started on port 50053")
     server.start()
-    print("[AzureAdapter] gRPC server started on port 50051")
     server.wait_for_termination()
 
 
 if __name__ == "__main__":
-    main()
+    serve()

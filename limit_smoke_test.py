@@ -1,10 +1,7 @@
 # limit_smoke_test.py
 """
 Ręczny smoke test dla cost_monitoring.limit_manager.
-
-UWAGA:
-- NIE tworzy ani nie kasuje żadnych zasobów.
-- Tylko odczytuje liczby użytkowników i VM-ek oraz testuje rzucanie LimitExceededError.
+-odczytuje liczby użytkowników i VM-ek oraz testuje rzucanie LimitExceededError.
 """
 
 from config.settings import validate_config

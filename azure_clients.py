@@ -2,7 +2,7 @@
 """
 Centralny moduł trzymający klientów do usług Azure, używany w całym adapterze.
 
-Zastępuje wywołania boto3.client(...) z adaptera AWS.
+Analogiczna libka z AWS  boto3.client(...)
 """
 
 from functools import lru_cache
@@ -60,7 +60,7 @@ def get_graph_client() -> GraphClient:
 def get_resource_client() -> ResourceManagementClient:
     """
     Klient ResourceManagementClient – odpowiednik boto3.client('ec2') / 'resourcegroupstaggingapi'
-    w tym sensie, że pozwala zarządzać resource groupami i zasobami.
+   pozwala zarządzać resource groupami i zasobami.
     """
     credential = get_credential()
     return ResourceManagementClient(credential, AZURE_SUBSCRIPTION_ID)
@@ -83,5 +83,5 @@ def get_cost_client() -> CostManagementClient:
     Będzie używany w cost_monitoring/limit_manager.py.
     """
     credential = get_credential()
-    # subscription_id podajesz później jako scope w zapytaniu (np. "/subscriptions/<id>")
+    # subscription_id podajesz później jako scope w zapytaniu
     return CostManagementClient(credential)

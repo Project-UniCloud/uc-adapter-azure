@@ -2,8 +2,6 @@
 """
 Ręczny smoke test dla identity.user_manager i identity.group_manager.
 
-UWAGA: to faktycznie stworzy użytkownika i grupę w Entra ID,
-więc używaj jakichś testowych nazw i po wszystkim sprawdź w portalu.
 """
 
 import time
@@ -20,10 +18,8 @@ def main() -> None:
     user_mgr = AzureUserManager()
     group_mgr = AzureGroupManager()
 
-    # Możesz zmieniać te nazwy przy kolejnych testach,
-    # żeby uniknąć kolizji z istniejącymi obiektami.
     TEST_GROUP_NAME = "uc-test-group6"
-    TEST_LOGIN = "uc.test.user6"  # zrobi się uc.test.user5@<twoj_UDOMAIN>
+    TEST_LOGIN = "uc.test.user6"  # wynik uc.test.user5@<twoj_UDOMAIN>
 
     # 2. Tworzenie grupy
     print(f"[+] Tworzę grupę: {TEST_GROUP_NAME!r}")
@@ -85,20 +81,19 @@ def main() -> None:
             m.get("userPrincipalName") or m.get("displayName"),
         )
 
-    # 7. Cleanup – zostawiam zakomentowany, żebyś mógł łatwo obejrzeć obiekty w portalu.
-    # Jeśli chcesz, odkomentuj blok poniżej.
+    # 7. Cleanup
 
-    # print("[+] Usuwam członka z grupy...")
-    # group_mgr.remove_member(group_id, user_id)
-    # print("    -> OK (albo 404, jeśli Graph uzna że już go nie było)")
+    print("[+] Usuwam członka z grupy...")
+    group_mgr.remove_member(group_id, user_id)
+    print("    -> OK (albo 404, jeśli Graph uzna że już go nie było)")
 
-    # print("[+] Usuwam użytkownika...")
-    # user_mgr.delete_user(TEST_LOGIN)
-    # print("    -> OK (albo 404)")
+    print("[+] Usuwam użytkownika...")
+    user_mgr.delete_user(TEST_LOGIN)
+    print("    -> OK (albo 404)")
 
-    # print("[+] Usuwam grupę...")
-    # group_mgr.delete_group(group_id)
-    # print("    -> OK (albo 404)")
+    print("[+] Usuwam grupę...")
+    group_mgr.delete_group(group_id)
+    print("    -> OK (albo 404)")
 
     print("\n[SMOKE TEST] Zakończono bez wyjątków.")
 

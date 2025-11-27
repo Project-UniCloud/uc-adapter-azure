@@ -67,6 +67,9 @@ class AzureUserManager:
         }
 
         resp = self._graph.post("/users", json=body)
+        print("Graph create_user error:")
+        print("  status:", resp.status_code)
+        print("  body:", resp.text)  # albo resp.json() jeśli jesteś pewien że to JSON
         resp.raise_for_status()
         data = resp.json()
         return data["id"]
