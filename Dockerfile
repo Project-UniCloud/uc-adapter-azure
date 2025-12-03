@@ -26,3 +26,4 @@ EXPOSE 50053
 # Run the adapter
 ENTRYPOINT ["python", "main.py"]
 
+
