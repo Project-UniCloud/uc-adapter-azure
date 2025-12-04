@@ -10,11 +10,15 @@ To jest odpowiednik AWS-owego IAM GroupManager:
 """
 
 import time
+import logging
 from typing import Optional, List, Dict
 
 from msgraph.core import GraphClient
 
 from azure_clients import get_graph_client
+from identity.utils import normalize_name
+
+logger = logging.getLogger(__name__)
 
 
 class AzureGroupManager:
@@ -32,14 +36,18 @@ class AzureGroupManager:
     def create_group(self, name: str, description: Optional[str] = None) -> str:
         """
         Tworzy nową grupę bezpieczeństwa (security group) w Entra ID.
+        Normalizuje nazwę grupy (spaces → dashes) dla zgodności z AWS adapterem.
 
         Zwraca:
             id grupy (GUID), którego używamy dalej np. w add_member.
         """
+        # Normalize group name (matches AWS adapter behavior)
+        normalized_name = normalize_name(name)
+
         body = {
-            "displayName": name,
+            "displayName": normalized_name,
             "mailEnabled": False,  # klasyczna security group, bez skrzynki pocztowej
-            "mailNickname": name.replace(" ", "-").lower(),
+            "mailNickname": normalized_name.replace(" ", "-").lower(),
             "securityEnabled": True,
         }
 
@@ -72,11 +80,14 @@ class AzureGroupManager:
     def get_group_by_name(self, name: str) -> Optional[Dict]:
         """
         Wyszukuje grupę po displayName.
+        Normalizuje nazwę przed wyszukiwaniem (spaces → dashes).
         Jeśli znajdzie dokładnie jedną – zwraca jej dane.
         Jeśli brak grup / więcej niż jedna – zwraca None.
         """
+        # Normalize group name before searching (matches AWS adapter behavior)
+        normalized_name = normalize_name(name)
         params = {
-            "$filter": f"displayName eq '{name}'",
+            "$filter": f"displayName eq '{normalized_name}'",
         }
         resp = self._graph.get("/groups", params=params)
         resp.raise_for_status()
@@ -127,29 +138,81 @@ class AzureGroupManager:
             if resp.status_code == 404:
                 # Typowy przypadek: katalog jeszcze się nie zreplikował
                 last_resp = resp
-                print(
-                    f"[AzureGroupManager.add_member] 404 ResourceNotFound dla group_id={group_id} "
+                logger.warning(
+                    f"404 ResourceNotFound dla group_id={group_id} "
                     f"(attempt {attempt}/{retries}) – czekam {delay}s..."
                 )
                 time.sleep(delay)
                 continue
 
             # Inne błędy traktujemy od razu jako poważne
-            print(
-                "[AzureGroupManager.add_member] ERROR:",
-                resp.status_code,
-                resp.text,
+            logger.error(
+                f"ERROR adding member: status={resp.status_code}, body={resp.text}"
             )
             resp.raise_for_status()
 
         # Po wszystkich próbach nadal 404 – logujemy szczegóły i wywalamy wyjątek
         if last_resp is not None:
-            print("[AzureGroupManager.add_member] FAILED po wielu próbach. Odpowiedź Graph:")
-            print("  status:", last_resp.status_code)
+            logger.error(
+                f"FAILED po wielu próbach. Odpowiedź Graph: status={last_resp.status_code}"
+            )
             try:
-                print("  body:", last_resp.json())
+                logger.error(f"  body: {last_resp.json()}")
             except Exception:
-                print("  raw body:", last_resp.text)
+                logger.error(f"  raw body: {last_resp.text}")
+            last_resp.raise_for_status()
+
+    def add_owner(
+        self,
+        group_id: str,
+        user_id: str,
+        retries: int = 5,
+        delay: float = 3.0,
+    ) -> None:
+        """
+        Dodaje właściciela (owner) do grupy, z prostym retry na 404
+        (opóźniona replikacja katalogu).
+
+        POST /groups/{group_id}/owners/$ref
+        body: { "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/{user_id}" }
+        """
+        ref = {
+            "@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{user_id}"
+        }
+
+        last_resp = None
+
+        for attempt in range(1, retries + 1):
+            resp = self._graph.post(f"/groups/{group_id}/owners/$ref", json=ref)
+
+            if resp.status_code in (204, 201):
+                # Dodano pomyślnie
+                return
+
+            if resp.status_code == 404:
+                # Typowy przypadek: katalog jeszcze się nie zreplikował
+                last_resp = resp
+                logger.warning(
+                    f"404 ResourceNotFound (owner) dla group_id={group_id} "
+                    f"(attempt {attempt}/{retries}) – czekam {delay}s..."
+                )
+                time.sleep(delay)
+                continue
+
+            logger.error(
+                f"ERROR adding owner: status={resp.status_code}, body={resp.text}"
+            )
+            resp.raise_for_status()
+
+        if last_resp is not None:
+            logger.error(
+                f"FAILED (owner) po wielu próbach. Odpowiedź Graph: "
+                f"status={last_resp.status_code}"
+            )
+            try:
+                logger.error(f"  body: {last_resp.json()}")
+            except Exception:
+                logger.error(f"  raw body: {last_resp.text}")
             last_resp.raise_for_status()
 
     def remove_member(self, group_id: str, user_id: str) -> None:
