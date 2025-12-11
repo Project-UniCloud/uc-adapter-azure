@@ -5,13 +5,18 @@ package adapter;
 // === CloudAdapter Service Definition ===
 service CloudAdapter {
   rpc GetStatus(StatusRequest) returns (StatusResponse);
+  rpc GetAvailableServices(GetAvailableServicesRequest) returns (GetAvailableServicesResponse);
   rpc CreateGroupWithLeaders(CreateGroupWithLeadersRequest) returns (GroupCreatedResponse);
   rpc CreateUsersForGroup(CreateUsersForGroupRequest) returns (CreateUsersForGroupResponse);
   rpc GroupExists(GroupExistsRequest) returns (GroupExistsResponse);
+  rpc GetResourceCount(ResourceCountRequest) returns (ResourceCountResponse);
   rpc GetTotalCostForGroup(CostRequest) returns (CostResponse);
   rpc GetTotalCostsForAllGroups(CostRequest) returns (AllGroupsCostResponse);
   rpc GetTotalCost(CostRequest) returns (CostResponse);
   rpc GetGroupCostWithServiceBreakdown(GroupServiceBreakdownRequest) returns (GroupServiceBreakdownResponse);
+  rpc GetTotalCostWithServiceBreakdown(CostRequest) returns (GroupServiceBreakdownResponse);
+  rpc GetGroupCostsLast6MonthsByService(GroupCostMapRequest) returns (GroupCostMapResponse);
+  rpc GetGroupMonthlyCostsLast6Months(GroupMonthlyCostsRequest) returns (GroupMonthlyCostsResponse);
   rpc RemoveGroup(RemoveGroupRequest) returns (RemoveGroupResponse);
   rpc CleanupGroupResources(CleanupGroupRequest) returns (CleanupGroupResponse);
 }
@@ -88,20 +93,59 @@ message GroupServiceBreakdownResponse {
   repeated ServiceCost breakdown = 2;
 }
 
+// === Service Discovery ===
+message GetAvailableServicesRequest {}
+
+message GetAvailableServicesResponse {
+  repeated string services = 1;
+}
+
+// === Resource Counting ===
+message ResourceCountRequest {
+  string groupName = 1;
+  string resourceType = 2;
+}
+
+message ResourceCountResponse {
+  int32 count = 1;
+}
+
 // === Group Removal ===
 message RemoveGroupRequest {
   string groupName = 1;
 }
 
 message RemoveGroupResponse {
-  string message = 1;
+  bool success = 1;
+  repeated string removedUsers = 2;
+  string message = 3;
 }
 
 // === Resource Cleanup ===
 message CleanupGroupRequest {
   string groupName = 1;
+  bool force = 2;
 }
 
 message CleanupGroupResponse {
-  string message = 1;
+  bool success = 1;
+  repeated string deletedResources = 2;
+  string message = 3;
+}
+
+// === Historical Cost Queries ===
+message GroupCostMapRequest {
+  string groupName = 1;
+}
+
+message GroupCostMapResponse {
+  map<string, double> costs = 1;
+}
+
+message GroupMonthlyCostsRequest {
+  string groupName = 1;
+}
+
+message GroupMonthlyCostsResponse {
+  map<string, double> monthCosts = 1;
 }

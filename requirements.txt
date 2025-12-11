@@ -12,6 +12,7 @@ azure-mgmt-compute
 azure-mgmt-network
 azure-mgmt-costmanagement
 azure-mgmt-authorization
+azure-mgmt-storage
 
 # gRPC + Protobuf (dobrane wersje działające na Win + Python 3.11)
 grpcio==1.62.2
