@@ -7,10 +7,14 @@ from typing import List
 import grpc
 
 from config.settings import validate_config
+from config.policy_manager import PolicyManager
 from identity.user_manager import AzureUserManager
 from identity.group_manager import AzureGroupManager
 from identity.rbac_manager import AzureRBACManager
 from identity.utils import normalize_name, build_username_with_group_suffix
+from clean_resources.resource_finder import ResourceFinder
+from clean_resources.resource_deleter import ResourceDeleter
+from cost_monitoring import limit_manager as cost_manager
 from protos import adapter_interface_pb2 as pb2
 from protos import adapter_interface_pb2_grpc as pb2_grpc
 
@@ -28,7 +32,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         self.user_manager = AzureUserManager()
         self.group_manager = AzureGroupManager()
         self.rbac_manager = AzureRBACManager()
-        # docelowo tutaj dodajemy LimitManager od kosztów
+        self.policy_manager = PolicyManager(self.rbac_manager)
+        self.resource_finder = ResourceFinder()
+        self.resource_deleter = ResourceDeleter()
 
     # ========== GetStatus ==========
 
@@ -36,6 +42,24 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         resp = pb2.StatusResponse()
         resp.isHealthy = True
         return resp
+
+    # ========== GetAvailableServices ==========
+
+    def GetAvailableServices(self, request, context):
+        """
+        Returns list of available resource types based on configured RBAC roles.
+        Azure equivalent of AWS GetAvailableServices.
+        """
+        try:
+            services_list = self.policy_manager.get_available_services()
+            response = pb2.GetAvailableServicesResponse()
+            response.services.extend(services_list)
+            return response
+        except Exception as e:
+            logger.error(f"[GetAvailableServices] Error: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GetAvailableServicesResponse()
 
     # ========== GroupExists ==========
 
@@ -279,7 +303,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 created_leaders.append((leader_login, leader_id))
 
             response = pb2.GroupCreatedResponse()
-            response.groupName = normalized_group_name
+            # Backend expects original group name with spaces (e.g., "AI 2024L")
+            # GroupUniqueName.fromString() validates format: ".* \\d{4}[ZL]"
+            response.groupName = group_name  # Return original name, not normalized
             return response
 
         except Exception as e:
@@ -288,68 +314,269 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(str(e))
             return pb2.GroupCreatedResponse()
 
-    # ========== Metody kosztowe – na razie atrapy ==========
+    # ========== GetResourceCount ==========
+
+    def GetResourceCount(self, request, context):
+        """
+        Returns count of resources with tag Group=<groupName> for specific resource type.
+        """
+        group_name = request.groupName
+        resource_type = (request.resourceType or "").strip().lower()
+        
+        if not resource_type:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole resourceType nie może być puste (np. 'vm', 'storage').")
+            return pb2.ResourceCountResponse()
+        
+        try:
+            # Find resources by group tag
+            resources = self.resource_finder.find_resources_by_tags({"Group": group_name})
+            # Filter by service type
+            count = sum(1 for r in resources if (r.get("service") or "").lower() == resource_type)
+            return pb2.ResourceCountResponse(count=count)
+        except Exception as e:
+            logger.error(f"[GetResourceCount] Error: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.ResourceCountResponse()
+
+    # ========== Cost Monitoring Methods ==========
 
     def GetTotalCostForGroup(self, request, context):
         """
-        Zwraca koszt grupy za zadany okres.
-        Na razie atrapa – zawsze 0.0 (do późniejszej integracji z Azure Cost Management).
+        Returns total cost for a group for the specified period.
+        Uses Azure Cost Management API.
         """
         try:
+            cost = cost_manager.get_total_cost_for_group(
+                group_tag_value=request.groupName,
+                start_date=request.startDate,
+                end_date=request.endDate or None
+            )
             resp = pb2.CostResponse()
-            resp.amount = 0.0
+            resp.amount = cost
             return resp
         except Exception as e:
-            logger.error(f"[GetTotalCostForGroup] Error: {e}")
+            logger.error(f"[GetTotalCostForGroup] Error: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return pb2.CostResponse()
 
     def GetTotalCostsForAllGroups(self, request, context):
         """
-        Zwraca koszty wszystkich grup.
-        Na razie atrapa – pusta lista.
+        Returns costs for all groups.
+        Uses Azure Cost Management API.
+        
+        Note: Azure Cost Management API returns normalized group names from tags.
+        We need to map them back to original names (with spaces) for backend compatibility.
+        Backend expects format "AI 2024L" (with spaces) for GroupUniqueName.fromString().
         """
         try:
+            costs_dict = cost_manager.get_total_costs_for_all_groups(
+                start_date=request.startDate,
+                end_date=request.endDate or None
+            )
             resp = pb2.AllGroupsCostResponse()
-            # docelowo tutaj wypełnimy resp.groupCosts
+            
+            # Map normalized names back to original format (with spaces)
+            # Backend expects "AI 2024L" format, not "AI-2024L"
+            for normalized_group, cost in costs_dict.items():
+                # Try to find original group name by querying Azure AD
+                # If not found, attempt to denormalize (dashes -> spaces)
+                original_name = self._denormalize_group_name(normalized_group)
+                
+                group_cost = resp.groupCosts.add()
+                group_cost.groupName = original_name
+                group_cost.amount = cost
             return resp
         except Exception as e:
-            logger.error(f"[GetTotalCostsForAllGroups] Error: {e}")
+            logger.error(f"[GetTotalCostsForAllGroups] Error: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return pb2.AllGroupsCostResponse()
+    
+    def _denormalize_group_name(self, normalized_name: str) -> str:
+        """
+        Attempts to denormalize group name (dashes -> spaces) for backend compatibility.
+        Backend expects format "AI 2024L" (with spaces) for GroupUniqueName.fromString().
+        
+        This is a best-effort approach. For exact mapping, we would need to query Azure AD
+        to get the original group name, but that's expensive. Instead, we try to reverse
+        the normalization by replacing dashes with spaces, which works for most cases.
+        
+        Note: This may not work perfectly for all group names, but should work for
+        standard format like "AI-2024L" -> "AI 2024L".
+        """
+        # Try to find original name by querying Azure AD groups
+        try:
+            # Query Azure AD for groups matching the normalized name
+            group = self.group_manager.get_group_by_name(normalized_name)
+            if group:
+                # If we find a group, we still need the original name
+                # Since Azure AD stores normalized names, we need to reverse the normalization
+                # The pattern is usually: "Name-YYYYZ/L" -> "Name YYYYZ/L"
+                # We'll replace dashes with spaces, but be careful with the semester suffix
+                display_name = group.get("displayName", normalized_name)
+                
+                # If display name matches normalized, try to reverse normalize
+                if display_name == normalized_name:
+                    # Pattern: "AI-2024L" -> "AI 2024L"
+                    # Replace dashes with spaces, but keep the last part (semester) intact
+                    # Semester format: YYYYZ or YYYYL (e.g., "2024L")
+                    import re
+                    # Match pattern: word-dash-word-dash-YYYYZ/L
+                    # We want to replace dashes with spaces, but keep the semester part
+                    # Example: "AI-2024L" -> "AI 2024L"
+                    # Example: "Test-Group-2024L" -> "Test Group 2024L"
+                    # Semester is always at the end: YYYYZ or YYYYL
+                    pattern = r'^(.+)-(\d{4}[ZL])$'
+                    match = re.match(pattern, normalized_name)
+                    if match:
+                        name_part = match.group(1)
+                        semester = match.group(2)
+                        # Replace remaining dashes with spaces
+                        denormalized_name = name_part.replace('-', ' ') + ' ' + semester
+                        return denormalized_name
+                    else:
+                        # Fallback: replace all dashes with spaces
+                        return normalized_name.replace('-', ' ')
+                else:
+                    return display_name
+            else:
+                # Group not found, try to reverse normalize
+                import re
+                pattern = r'^(.+)-(\d{4}[ZL])$'
+                match = re.match(pattern, normalized_name)
+                if match:
+                    name_part = match.group(1)
+                    semester = match.group(2)
+                    return name_part.replace('-', ' ') + ' ' + semester
+                else:
+                    return normalized_name.replace('-', ' ')
+        except Exception as e:
+            logger.warning(f"Failed to denormalize group name '{normalized_name}': {e}")
+            # Fallback: try simple dash-to-space replacement
+            import re
+            pattern = r'^(.+)-(\d{4}[ZL])$'
+            match = re.match(pattern, normalized_name)
+            if match:
+                name_part = match.group(1)
+                semester = match.group(2)
+                return name_part.replace('-', ' ') + ' ' + semester
+            else:
+                return normalized_name.replace('-', ' ')
 
     def GetTotalCost(self, request, context):
         """
-        Całkowity koszt subskrypcji.
-        Na razie atrapa – 0.0.
+        Returns total Azure subscription cost.
+        Uses Azure Cost Management API.
         """
         try:
+            cost = cost_manager.get_total_azure_cost(
+                start_date=request.startDate,
+                end_date=request.endDate or None
+            )
             resp = pb2.CostResponse()
-            resp.amount = 0.0
+            resp.amount = cost
             return resp
         except Exception as e:
-            logger.error(f"[GetTotalCost] Error: {e}")
+            logger.error(f"[GetTotalCost] Error: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return pb2.CostResponse()
 
     def GetGroupCostWithServiceBreakdown(self, request, context):
         """
-        Koszt grupy z podziałem na usługi.
-        Na razie atrapa – total = 0.0, brak breakdown.
+        Returns group cost with service breakdown.
+        Uses Azure Cost Management API.
         """
         try:
+            breakdown = cost_manager.get_group_cost_with_service_breakdown(
+                group_tag_value=request.groupName,
+                start_date=request.startDate,
+                end_date=request.endDate or None
+            )
             resp = pb2.GroupServiceBreakdownResponse()
-            resp.total = 0.0
-            # resp.breakdown pozostaje puste
+            resp.total = breakdown['total']
+            for service_name, amount in breakdown['by_service'].items():
+                service_cost = resp.breakdown.add()
+                service_cost.serviceName = service_name
+                service_cost.amount = amount
             return resp
         except Exception as e:
-            logger.error(f"[GetGroupCostWithServiceBreakdown] Error: {e}")
+            logger.error(f"[GetGroupCostWithServiceBreakdown] Error: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return pb2.GroupServiceBreakdownResponse()
+
+    def GetTotalCostWithServiceBreakdown(self, request, context):
+        """
+        Returns total Azure cost with service breakdown.
+        Uses Azure Cost Management API.
+        """
+        try:
+            result = cost_manager.get_total_cost_with_service_breakdown(
+                start_date=request.startDate,
+                end_date=request.endDate or None
+            )
+            resp = pb2.GroupServiceBreakdownResponse()
+            resp.total = result['total']
+            for service_name, amount in result['by_service'].items():
+                entry = resp.breakdown.add()
+                entry.serviceName = service_name
+                entry.amount = amount
+            return resp
+        except Exception as e:
+            logger.error(f"[GetTotalCostWithServiceBreakdown] Error: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GroupServiceBreakdownResponse()
+
+    def GetGroupCostsLast6MonthsByService(self, request, context):
+        """
+        Returns group costs for last 6 months grouped by service.
+        Uses Azure Cost Management API.
+        """
+        group_name = (request.groupName or '').strip()
+        if not group_name:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole groupName nie może być puste.")
+            return pb2.GroupCostMapResponse()
+        
+        try:
+            costs = cost_manager.get_group_cost_last_6_months_by_service(group_tag_value=group_name)
+            resp = pb2.GroupCostMapResponse()
+            for k, v in costs.items():
+                resp.costs[k] = v
+            return resp
+        except Exception as e:
+            logger.error(f"[GetGroupCostsLast6MonthsByService] Error: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GroupCostMapResponse()
+
+    def GetGroupMonthlyCostsLast6Months(self, request, context):
+        """
+        Returns monthly costs for last 6 months for a group.
+        Uses Azure Cost Management API.
+        """
+        group_name = (request.groupName or '').strip()
+        if not group_name:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole groupName nie może być puste.")
+            return pb2.GroupMonthlyCostsResponse()
+        
+        try:
+            costs = cost_manager.get_group_monthly_costs_last_6_months(group_tag_value=group_name)
+            resp = pb2.GroupMonthlyCostsResponse()
+            for month, amount in costs.items():
+                resp.monthCosts[month] = amount
+            return resp
+        except Exception as e:
+            logger.error(f"[GetGroupMonthlyCostsLast6Months] Error: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GroupMonthlyCostsResponse()
 
     # ========== RemoveGroup ==========
 
@@ -367,39 +594,48 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             if not group:
                 # Group doesn't exist - return success (idempotent operation)
                 response = pb2.RemoveGroupResponse()
+                response.success = True
                 response.message = f"Group '{normalized_group_name}' does not exist"
                 return response
 
             group_id = group["id"]
+            removed_users = []
             
             # Get all members and delete them
             members = self.group_manager.list_members(group_id)
             for member in members:
                 if member.get("objectType") == "User":
-                    user_id = member.get("id")
-                    try:
-                        # Get user details to find login
-                        user_data = self.user_manager.get_user(member.get("userPrincipalName", ""))
-                        if user_data:
-                            # Delete user (will handle username with suffix)
-                            self.user_manager.delete_user(user_data.get("userPrincipalName", ""))
-                    except Exception as e:
-                        logger.warning(f"Failed to delete user {user_id}: {e}")
-                        # Continue deleting other users
+                    user_principal_name = member.get("userPrincipalName", "")
+                    if user_principal_name:
+                        try:
+                            # Remove from group first
+                            self.group_manager.remove_member(group_id, member.get("id"))
+                            # Delete user
+                            self.user_manager.delete_user(user_principal_name)
+                            removed_users.append(user_principal_name)
+                            logger.info(f"Removed user '{user_principal_name}' from group and Azure AD")
+                        except Exception as e:
+                            logger.warning(f"Failed to delete user {user_principal_name}: {e}")
+                            # Continue deleting other users
 
             # Delete the group
             self.group_manager.delete_group(group_id)
             
             response = pb2.RemoveGroupResponse()
+            response.success = True
+            response.removedUsers.extend(removed_users)
             response.message = f"Group '{normalized_group_name}' and its members have been removed"
-            logger.info(f"Removed group '{normalized_group_name}' and its members")
+            logger.info(f"Removed group '{normalized_group_name}' and {len(removed_users)} members")
             return response
 
         except Exception as e:
-            logger.error(f"[RemoveGroup] Error: {e}")
+            logger.error(f"[RemoveGroup] Error: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
-            return pb2.RemoveGroupResponse()
+            response = pb2.RemoveGroupResponse()
+            response.success = False
+            response.message = str(e)
+            return response
 
     # ========== CleanupGroupResources ==========
 
@@ -414,27 +650,41 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
         try:
             # Find resources tagged with group name
-            # This is a placeholder - you'll need to implement ResourceFinder
-            # For now, we'll just return success
+            resources = self.resource_finder.find_resources_by_tags({"Group": normalized_group_name})
             
-            # TODO: Implement actual resource cleanup using ResourceFinder
-            # from clean_resources.resource_finder import ResourceFinder
-            # finder = ResourceFinder()
-            # resources = finder.find_resources_by_tags({"group": normalized_group_name})
-            # deleter = ResourceDeleter()
-            # for resource in resources:
-            #     deleter.delete_resource(resource)
+            if not resources:
+                response = pb2.CleanupGroupResponse()
+                response.success = True
+                response.message = f"No resources found for group '{normalized_group_name}'"
+                logger.info(f"No resources found for group '{normalized_group_name}'")
+                return response
+            
+            # Delete resources
+            deleted_resources = []
+            for resource in resources:
+                try:
+                    result_msg = self.resource_deleter.delete_resource(resource)
+                    deleted_resources.append(result_msg)
+                    logger.info(f"Deleted resource: {result_msg}")
+                except Exception as e:
+                    logger.error(f"Error deleting resource {resource.get('name', 'unknown')}: {e}", exc_info=True)
+                    # Continue with other resources
             
             response = pb2.CleanupGroupResponse()
-            response.message = f"Resources for group '{normalized_group_name}' have been cleaned up"
-            logger.info(f"Cleaned up resources for group '{normalized_group_name}'")
+            response.success = True
+            response.deletedResources.extend(deleted_resources)
+            response.message = f"Cleanup completed for group '{normalized_group_name}'. Deleted {len(deleted_resources)} resources."
+            logger.info(f"Cleaned up {len(deleted_resources)} resources for group '{normalized_group_name}'")
             return response
 
         except Exception as e:
-            logger.error(f"[CleanupGroupResources] Error: {e}")
+            logger.error(f"[CleanupGroupResources] Error: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
-            return pb2.CleanupGroupResponse()
+            response = pb2.CleanupGroupResponse()
+            response.success = False
+            response.message = str(e)
+            return response
 
 
 def serve():

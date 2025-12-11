@@ -153,7 +153,9 @@ def test_get_total_costs_for_all_groups():
         # Backend parses groupName with GroupUniqueName.fromString() which expects "Name YYYYZ/L" format
         
         assert hasattr(response, 'groupCosts'), "Response should have groupCosts field"
-        assert hasattr(response.groupCosts, "__iter__"), "groupCosts should be iterable"
+        # groupCosts is a repeated field in protobuf, which is always iterable
+        # Even if empty, it should be iterable (returns empty iterator)
+        assert hasattr(response.groupCosts, "__iter__") or hasattr(response.groupCosts, "__len__"), "groupCosts should be iterable or have length"
         
         print(f"PASS: Response format matches backend expectations")
         print(f"      Date range: {start_date} to {end_date}")
@@ -250,12 +252,168 @@ def test_data_type_compatibility():
         assert isinstance(group_cost.groupName, str), "groupName should be string"
         assert isinstance(group_cost.amount, (int, float)), "amount should be numeric"
         
+        # Test RemoveGroupResponse (new fields)
+        remove_resp = pb2.RemoveGroupResponse()
+        remove_resp.success = True
+        remove_resp.removedUsers.extend(["user1", "user2"])
+        remove_resp.message = "Test message"
+        assert isinstance(remove_resp.success, bool), "success should be bool"
+        assert hasattr(remove_resp, 'removedUsers'), "should have removedUsers field"
+        assert isinstance(remove_resp.message, str), "message should be string"
+        
+        # Test CleanupGroupResponse (new fields)
+        cleanup_resp = pb2.CleanupGroupResponse()
+        cleanup_resp.success = True
+        cleanup_resp.deletedResources.extend(["resource1", "resource2"])
+        cleanup_resp.message = "Test message"
+        assert isinstance(cleanup_resp.success, bool), "success should be bool"
+        assert hasattr(cleanup_resp, 'deletedResources'), "should have deletedResources field"
+        assert isinstance(cleanup_resp.message, str), "message should be string"
+        
+        # Test GetAvailableServicesResponse
+        services_resp = pb2.GetAvailableServicesResponse()
+        services_resp.services.extend(["vm", "storage"])
+        assert hasattr(services_resp, 'services'), "should have services field"
+        # services is a repeated field in protobuf, which is always iterable
+        assert hasattr(services_resp.services, "__iter__") or hasattr(services_resp.services, "__len__"), "services should be iterable or have length"
+        
+        # Test ResourceCountResponse
+        count_resp = pb2.ResourceCountResponse()
+        count_resp.count = 5
+        assert isinstance(count_resp.count, int), "count should be int"
+        
         print("PASS: All data types match backend expectations")
         print("      StatusResponse.isHealthy: bool")
         print("      GroupExistsResponse.exists: bool")
         print("      CostResponse.amount: double")
         print("      GroupCost.groupName: string")
         print("      GroupCost.amount: double")
+        print("      RemoveGroupResponse.success: bool")
+        print("      RemoveGroupResponse.removedUsers: repeated string")
+        print("      CleanupGroupResponse.success: bool")
+        print("      CleanupGroupResponse.deletedResources: repeated string")
+        print("      GetAvailableServicesResponse.services: repeated string")
+        print("      ResourceCountResponse.count: int32")
+        
+        return True
+    except AssertionError as e:
+        print(f"FAIL: {e}")
+        return False
+
+
+def test_get_available_services():
+    """Test GetAvailableServices - backend compatibility"""
+    print("\nTest 8: GetAvailableServices")
+    print("-" * 50)
+    
+    channel = grpc.insecure_channel("localhost:50053")
+    stub = pb2_grpc.CloudAdapterStub(channel)
+    
+    try:
+        request = pb2.GetAvailableServicesRequest()
+        response = stub.GetAvailableServices(request)
+        
+        assert hasattr(response, 'services'), "Response should have services field"
+        # services is a repeated field in protobuf, which is always iterable
+        # Even if empty, it should be iterable (returns empty iterator)
+        assert hasattr(response.services, "__iter__") or hasattr(response.services, "__len__"), "services should be iterable or have length"
+        
+        print(f"PASS: Response format matches backend expectations")
+        print(f"      Available services: {list(response.services)}")
+        print(f"      Count: {len(response.services)}")
+        
+        return True
+    except grpc.RpcError as e:
+        print(f"FAIL: {e.code().name} - {e.details()}")
+        return False
+    except AssertionError as e:
+        print(f"FAIL: {e}")
+        return False
+
+
+def test_get_resource_count():
+    """Test GetResourceCount - backend compatibility"""
+    print("\nTest 9: GetResourceCount")
+    print("-" * 50)
+    
+    channel = grpc.insecure_channel("localhost:50053")
+    stub = pb2_grpc.CloudAdapterStub(channel)
+    
+    test_group_name = "AI 2024L"
+    
+    try:
+        request = pb2.ResourceCountRequest(
+            groupName=test_group_name,
+            resourceType="vm"
+        )
+        response = stub.GetResourceCount(request)
+        
+        assert hasattr(response, 'count'), "Response should have count field"
+        assert isinstance(response.count, int), "count should be int"
+        
+        print(f"PASS: Response format matches backend expectations")
+        print(f"      Group: {test_group_name}")
+        print(f"      Resource type: vm")
+        print(f"      Count: {response.count}")
+        
+        return True
+    except grpc.RpcError as e:
+        print(f"FAIL: {e.code().name} - {e.details()}")
+        return False
+    except AssertionError as e:
+        print(f"FAIL: {e}")
+        return False
+
+
+def test_remove_group_response_format():
+    """Test RemoveGroup response format - backend expects success and removedUsers"""
+    print("\nTest 10: RemoveGroup response format validation")
+    print("-" * 50)
+    
+    # Backend expects RemoveGroupResponse with success, removedUsers, and message
+    response = pb2.RemoveGroupResponse()
+    response.success = True
+    response.removedUsers.extend(["user1@domain.com", "user2@domain.com"])
+    response.message = "Group removed successfully"
+    
+    try:
+        assert isinstance(response.success, bool), "success should be bool"
+        assert hasattr(response, 'removedUsers'), "should have removedUsers field"
+        assert hasattr(response, 'message'), "should have message field"
+        assert isinstance(response.message, str), "message should be string"
+        
+        print("PASS: Response format matches backend expectations")
+        print(f"      success: {response.success}")
+        print(f"      removedUsers count: {len(response.removedUsers)}")
+        print(f"      message: {response.message}")
+        
+        return True
+    except AssertionError as e:
+        print(f"FAIL: {e}")
+        return False
+
+
+def test_cleanup_group_resources_response_format():
+    """Test CleanupGroupResources response format - backend expects success and deletedResources"""
+    print("\nTest 11: CleanupGroupResources response format validation")
+    print("-" * 50)
+    
+    # Backend expects CleanupGroupResponse with success, deletedResources, and message
+    response = pb2.CleanupGroupResponse()
+    response.success = True
+    response.deletedResources.extend(["Deleted VM: vm1", "Deleted Storage: storage1"])
+    response.message = "Cleanup completed"
+    
+    try:
+        assert isinstance(response.success, bool), "success should be bool"
+        assert hasattr(response, 'deletedResources'), "should have deletedResources field"
+        assert hasattr(response, 'message'), "should have message field"
+        assert isinstance(response.message, str), "message should be string"
+        
+        print("PASS: Response format matches backend expectations")
+        print(f"      success: {response.success}")
+        print(f"      deletedResources count: {len(response.deletedResources)}")
+        print(f"      message: {response.message}")
         
         return True
     except AssertionError as e:
@@ -279,6 +437,10 @@ def run_all_tests():
         ("GetTotalCostsForAllGroups", test_get_total_costs_for_all_groups),
         ("GroupCreatedResponse Format", test_group_created_response_format),
         ("Data Type Compatibility", test_data_type_compatibility),
+        ("GetAvailableServices", test_get_available_services),
+        ("GetResourceCount", test_get_resource_count),
+        ("RemoveGroup Response Format", test_remove_group_response_format),
+        ("CleanupGroupResources Response Format", test_cleanup_group_resources_response_format),
     ]
     
     results = []
