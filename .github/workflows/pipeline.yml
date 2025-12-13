@@ -1,0 +1,58 @@
+name: Build and Push to GHCR
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME=ghcr.io/${OWNER_LOWER}/uc-adapter-azure:latest
+          docker build -t $IMAGE_NAME .
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+
+      - name: Push Docker image
+        if: github.event_name == 'push'
+        run: docker push ${{ env.IMAGE_NAME }}
+
+  deploy:
+    name: Deploy (Restart Application)
+    runs-on: self-hosted
+    needs: build
+    if: github.event_name == 'push'
+    steps:
+      - name: Trigger restart webhook
+        env:
+          RESTART_SECRET: ${{ secrets.RESTART_SECRET }}
+        run: |
+          curl -X GET "https://unicloud.projektstudencki.pl/restart-webhook/uc-adapter-azure" \
+            -H "Authorization: Bearer $RESTART_SECRET"
