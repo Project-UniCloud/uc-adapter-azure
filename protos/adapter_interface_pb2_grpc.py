@@ -2,7 +2,7 @@
 """Client and server classes corresponding to protobuf-defined services."""
 import grpc
 
-from . import adapter_interface_pb2 as adapter__interface__pb2
+from protos import adapter_interface_pb2 as adapter__interface__pb2
 
 
 class CloudAdapterStub(object):
@@ -20,6 +20,11 @@ class CloudAdapterStub(object):
                 request_serializer=adapter__interface__pb2.StatusRequest.SerializeToString,
                 response_deserializer=adapter__interface__pb2.StatusResponse.FromString,
                 )
+        self.GetAvailableServices = channel.unary_unary(
+                '/adapter.CloudAdapter/GetAvailableServices',
+                request_serializer=adapter__interface__pb2.GetAvailableServicesRequest.SerializeToString,
+                response_deserializer=adapter__interface__pb2.GetAvailableServicesResponse.FromString,
+                )
         self.CreateGroupWithLeaders = channel.unary_unary(
                 '/adapter.CloudAdapter/CreateGroupWithLeaders',
                 request_serializer=adapter__interface__pb2.CreateGroupWithLeadersRequest.SerializeToString,
@@ -34,6 +39,11 @@ class CloudAdapterStub(object):
                 '/adapter.CloudAdapter/GroupExists',
                 request_serializer=adapter__interface__pb2.GroupExistsRequest.SerializeToString,
                 response_deserializer=adapter__interface__pb2.GroupExistsResponse.FromString,
+                )
+        self.GetResourceCount = channel.unary_unary(
+                '/adapter.CloudAdapter/GetResourceCount',
+                request_serializer=adapter__interface__pb2.ResourceCountRequest.SerializeToString,
+                response_deserializer=adapter__interface__pb2.ResourceCountResponse.FromString,
                 )
         self.GetTotalCostForGroup = channel.unary_unary(
                 '/adapter.CloudAdapter/GetTotalCostForGroup',
@@ -55,6 +65,31 @@ class CloudAdapterStub(object):
                 request_serializer=adapter__interface__pb2.GroupServiceBreakdownRequest.SerializeToString,
                 response_deserializer=adapter__interface__pb2.GroupServiceBreakdownResponse.FromString,
                 )
+        self.GetTotalCostWithServiceBreakdown = channel.unary_unary(
+                '/adapter.CloudAdapter/GetTotalCostWithServiceBreakdown',
+                request_serializer=adapter__interface__pb2.CostRequest.SerializeToString,
+                response_deserializer=adapter__interface__pb2.GroupServiceBreakdownResponse.FromString,
+                )
+        self.GetGroupCostsLast6MonthsByService = channel.unary_unary(
+                '/adapter.CloudAdapter/GetGroupCostsLast6MonthsByService',
+                request_serializer=adapter__interface__pb2.GroupCostMapRequest.SerializeToString,
+                response_deserializer=adapter__interface__pb2.GroupCostMapResponse.FromString,
+                )
+        self.GetGroupMonthlyCostsLast6Months = channel.unary_unary(
+                '/adapter.CloudAdapter/GetGroupMonthlyCostsLast6Months',
+                request_serializer=adapter__interface__pb2.GroupMonthlyCostsRequest.SerializeToString,
+                response_deserializer=adapter__interface__pb2.GroupMonthlyCostsResponse.FromString,
+                )
+        self.RemoveGroup = channel.unary_unary(
+                '/adapter.CloudAdapter/RemoveGroup',
+                request_serializer=adapter__interface__pb2.RemoveGroupRequest.SerializeToString,
+                response_deserializer=adapter__interface__pb2.RemoveGroupResponse.FromString,
+                )
+        self.CleanupGroupResources = channel.unary_unary(
+                '/adapter.CloudAdapter/CleanupGroupResources',
+                request_serializer=adapter__interface__pb2.CleanupGroupRequest.SerializeToString,
+                response_deserializer=adapter__interface__pb2.CleanupGroupResponse.FromString,
+                )
 
 
 class CloudAdapterServicer(object):
@@ -62,6 +97,12 @@ class CloudAdapterServicer(object):
     """
 
     def GetStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetAvailableServices(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -80,6 +121,12 @@ class CloudAdapterServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def GroupExists(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetResourceCount(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -109,6 +156,36 @@ class CloudAdapterServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetTotalCostWithServiceBreakdown(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetGroupCostsLast6MonthsByService(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetGroupMonthlyCostsLast6Months(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RemoveGroup(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CleanupGroupResources(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_CloudAdapterServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -116,6 +193,11 @@ def add_CloudAdapterServicer_to_server(servicer, server):
                     servicer.GetStatus,
                     request_deserializer=adapter__interface__pb2.StatusRequest.FromString,
                     response_serializer=adapter__interface__pb2.StatusResponse.SerializeToString,
+            ),
+            'GetAvailableServices': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetAvailableServices,
+                    request_deserializer=adapter__interface__pb2.GetAvailableServicesRequest.FromString,
+                    response_serializer=adapter__interface__pb2.GetAvailableServicesResponse.SerializeToString,
             ),
             'CreateGroupWithLeaders': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateGroupWithLeaders,
@@ -131,6 +213,11 @@ def add_CloudAdapterServicer_to_server(servicer, server):
                     servicer.GroupExists,
                     request_deserializer=adapter__interface__pb2.GroupExistsRequest.FromString,
                     response_serializer=adapter__interface__pb2.GroupExistsResponse.SerializeToString,
+            ),
+            'GetResourceCount': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetResourceCount,
+                    request_deserializer=adapter__interface__pb2.ResourceCountRequest.FromString,
+                    response_serializer=adapter__interface__pb2.ResourceCountResponse.SerializeToString,
             ),
             'GetTotalCostForGroup': grpc.unary_unary_rpc_method_handler(
                     servicer.GetTotalCostForGroup,
@@ -151,6 +238,31 @@ def add_CloudAdapterServicer_to_server(servicer, server):
                     servicer.GetGroupCostWithServiceBreakdown,
                     request_deserializer=adapter__interface__pb2.GroupServiceBreakdownRequest.FromString,
                     response_serializer=adapter__interface__pb2.GroupServiceBreakdownResponse.SerializeToString,
+            ),
+            'GetTotalCostWithServiceBreakdown': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetTotalCostWithServiceBreakdown,
+                    request_deserializer=adapter__interface__pb2.CostRequest.FromString,
+                    response_serializer=adapter__interface__pb2.GroupServiceBreakdownResponse.SerializeToString,
+            ),
+            'GetGroupCostsLast6MonthsByService': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetGroupCostsLast6MonthsByService,
+                    request_deserializer=adapter__interface__pb2.GroupCostMapRequest.FromString,
+                    response_serializer=adapter__interface__pb2.GroupCostMapResponse.SerializeToString,
+            ),
+            'GetGroupMonthlyCostsLast6Months': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetGroupMonthlyCostsLast6Months,
+                    request_deserializer=adapter__interface__pb2.GroupMonthlyCostsRequest.FromString,
+                    response_serializer=adapter__interface__pb2.GroupMonthlyCostsResponse.SerializeToString,
+            ),
+            'RemoveGroup': grpc.unary_unary_rpc_method_handler(
+                    servicer.RemoveGroup,
+                    request_deserializer=adapter__interface__pb2.RemoveGroupRequest.FromString,
+                    response_serializer=adapter__interface__pb2.RemoveGroupResponse.SerializeToString,
+            ),
+            'CleanupGroupResources': grpc.unary_unary_rpc_method_handler(
+                    servicer.CleanupGroupResources,
+                    request_deserializer=adapter__interface__pb2.CleanupGroupRequest.FromString,
+                    response_serializer=adapter__interface__pb2.CleanupGroupResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -177,6 +289,23 @@ class CloudAdapter(object):
         return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetStatus',
             adapter__interface__pb2.StatusRequest.SerializeToString,
             adapter__interface__pb2.StatusResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def GetAvailableServices(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetAvailableServices',
+            adapter__interface__pb2.GetAvailableServicesRequest.SerializeToString,
+            adapter__interface__pb2.GetAvailableServicesResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -228,6 +357,23 @@ class CloudAdapter(object):
         return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GroupExists',
             adapter__interface__pb2.GroupExistsRequest.SerializeToString,
             adapter__interface__pb2.GroupExistsResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def GetResourceCount(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetResourceCount',
+            adapter__interface__pb2.ResourceCountRequest.SerializeToString,
+            adapter__interface__pb2.ResourceCountResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -296,5 +442,90 @@ class CloudAdapter(object):
         return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetGroupCostWithServiceBreakdown',
             adapter__interface__pb2.GroupServiceBreakdownRequest.SerializeToString,
             adapter__interface__pb2.GroupServiceBreakdownResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def GetTotalCostWithServiceBreakdown(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetTotalCostWithServiceBreakdown',
+            adapter__interface__pb2.CostRequest.SerializeToString,
+            adapter__interface__pb2.GroupServiceBreakdownResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def GetGroupCostsLast6MonthsByService(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetGroupCostsLast6MonthsByService',
+            adapter__interface__pb2.GroupCostMapRequest.SerializeToString,
+            adapter__interface__pb2.GroupCostMapResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def GetGroupMonthlyCostsLast6Months(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetGroupMonthlyCostsLast6Months',
+            adapter__interface__pb2.GroupMonthlyCostsRequest.SerializeToString,
+            adapter__interface__pb2.GroupMonthlyCostsResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def RemoveGroup(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/RemoveGroup',
+            adapter__interface__pb2.RemoveGroupRequest.SerializeToString,
+            adapter__interface__pb2.RemoveGroupResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def CleanupGroupResources(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/CleanupGroupResources',
+            adapter__interface__pb2.CleanupGroupRequest.SerializeToString,
+            adapter__interface__pb2.CleanupGroupResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

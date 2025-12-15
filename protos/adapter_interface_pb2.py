@@ -14,13 +14,17 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17\x61\x64\x61pter_interface.proto\x12\x07\x61\x64\x61pter\"\x0f\n\rStatusRequest\"#\n\x0eStatusResponse\x12\x11\n\tisHealthy\x18\x01 \x01(\x08\"Y\n\x1d\x43reateGroupWithLeadersRequest\x12\x14\n\x0cresourceType\x18\x01 \x01(\t\x12\x0f\n\x07leaders\x18\x02 \x03(\t\x12\x11\n\tgroupName\x18\x03 \x01(\t\")\n\x14GroupCreatedResponse\x12\x11\n\tgroupName\x18\x01 \x01(\t\">\n\x1a\x43reateUsersForGroupRequest\x12\r\n\x05users\x18\x01 \x03(\t\x12\x11\n\tgroupName\x18\x02 \x01(\t\".\n\x1b\x43reateUsersForGroupResponse\x12\x0f\n\x07message\x18\x01 \x01(\t\"\'\n\x12GroupExistsRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\"%\n\x13GroupExistsResponse\x12\x0e\n\x06\x65xists\x18\x01 \x01(\x08\"D\n\x0b\x43ostRequest\x12\x11\n\tstartDate\x18\x01 \x01(\t\x12\x0f\n\x07\x65ndDate\x18\x02 \x01(\t\x12\x11\n\tgroupName\x18\x03 \x01(\t\"\x1e\n\x0c\x43ostResponse\x12\x0e\n\x06\x61mount\x18\x01 \x01(\x01\".\n\tGroupCost\x12\x11\n\tgroupName\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\"?\n\x15\x41llGroupsCostResponse\x12&\n\ngroupCosts\x18\x01 \x03(\x0b\x32\x12.adapter.GroupCost\"U\n\x1cGroupServiceBreakdownRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\x12\x11\n\tstartDate\x18\x02 \x01(\t\x12\x0f\n\x07\x65ndDate\x18\x03 \x01(\t\"2\n\x0bServiceCost\x12\x13\n\x0bserviceName\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\"W\n\x1dGroupServiceBreakdownResponse\x12\r\n\x05total\x18\x01 \x01(\x01\x12\'\n\tbreakdown\x18\x02 \x03(\x0b\x32\x14.adapter.ServiceCost2\xa1\x05\n\x0c\x43loudAdapter\x12<\n\tGetStatus\x12\x16.adapter.StatusRequest\x1a\x17.adapter.StatusResponse\x12_\n\x16\x43reateGroupWithLeaders\x12&.adapter.CreateGroupWithLeadersRequest\x1a\x1d.adapter.GroupCreatedResponse\x12`\n\x13\x43reateUsersForGroup\x12#.adapter.CreateUsersForGroupRequest\x1a$.adapter.CreateUsersForGroupResponse\x12H\n\x0bGroupExists\x12\x1b.adapter.GroupExistsRequest\x1a\x1c.adapter.GroupExistsResponse\x12\x43\n\x14GetTotalCostForGroup\x12\x14.adapter.CostRequest\x1a\x15.adapter.CostResponse\x12Q\n\x19GetTotalCostsForAllGroups\x12\x14.adapter.CostRequest\x1a\x1e.adapter.AllGroupsCostResponse\x12;\n\x0cGetTotalCost\x12\x14.adapter.CostRequest\x1a\x15.adapter.CostResponse\x12q\n GetGroupCostWithServiceBreakdown\x12%.adapter.GroupServiceBreakdownRequest\x1a&.adapter.GroupServiceBreakdownResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17\x61\x64\x61pter_interface.proto\x12\x07\x61\x64\x61pter\"\x0f\n\rStatusRequest\"#\n\x0eStatusResponse\x12\x11\n\tisHealthy\x18\x01 \x01(\x08\"Y\n\x1d\x43reateGroupWithLeadersRequest\x12\x14\n\x0cresourceType\x18\x01 \x01(\t\x12\x0f\n\x07leaders\x18\x02 \x03(\t\x12\x11\n\tgroupName\x18\x03 \x01(\t\")\n\x14GroupCreatedResponse\x12\x11\n\tgroupName\x18\x01 \x01(\t\">\n\x1a\x43reateUsersForGroupRequest\x12\r\n\x05users\x18\x01 \x03(\t\x12\x11\n\tgroupName\x18\x02 \x01(\t\".\n\x1b\x43reateUsersForGroupResponse\x12\x0f\n\x07message\x18\x01 \x01(\t\"\'\n\x12GroupExistsRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\"%\n\x13GroupExistsResponse\x12\x0e\n\x06\x65xists\x18\x01 \x01(\x08\"D\n\x0b\x43ostRequest\x12\x11\n\tstartDate\x18\x01 \x01(\t\x12\x0f\n\x07\x65ndDate\x18\x02 \x01(\t\x12\x11\n\tgroupName\x18\x03 \x01(\t\"\x1e\n\x0c\x43ostResponse\x12\x0e\n\x06\x61mount\x18\x01 \x01(\x01\".\n\tGroupCost\x12\x11\n\tgroupName\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\"?\n\x15\x41llGroupsCostResponse\x12&\n\ngroupCosts\x18\x01 \x03(\x0b\x32\x12.adapter.GroupCost\"U\n\x1cGroupServiceBreakdownRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\x12\x11\n\tstartDate\x18\x02 \x01(\t\x12\x0f\n\x07\x65ndDate\x18\x03 \x01(\t\"2\n\x0bServiceCost\x12\x13\n\x0bserviceName\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\x01\"W\n\x1dGroupServiceBreakdownResponse\x12\r\n\x05total\x18\x01 \x01(\x01\x12\'\n\tbreakdown\x18\x02 \x03(\x0b\x32\x14.adapter.ServiceCost\"\x1d\n\x1bGetAvailableServicesRequest\"0\n\x1cGetAvailableServicesResponse\x12\x10\n\x08services\x18\x01 \x03(\t\"?\n\x14ResourceCountRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\x12\x14\n\x0cresourceType\x18\x02 \x01(\t\"&\n\x15ResourceCountResponse\x12\r\n\x05\x63ount\x18\x01 \x01(\x05\"\'\n\x12RemoveGroupRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\"M\n\x13RemoveGroupResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x14\n\x0cremovedUsers\x18\x02 \x03(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"7\n\x13\x43leanupGroupRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\x12\r\n\x05\x66orce\x18\x02 \x01(\x08\"R\n\x14\x43leanupGroupResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x18\n\x10\x64\x65letedResources\x18\x02 \x03(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\"(\n\x13GroupCostMapRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\"}\n\x14GroupCostMapResponse\x12\x37\n\x05\x63osts\x18\x01 \x03(\x0b\x32(.adapter.GroupCostMapResponse.CostsEntry\x1a,\n\nCostsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x01:\x02\x38\x01\"-\n\x18GroupMonthlyCostsRequest\x12\x11\n\tgroupName\x18\x01 \x01(\t\"\x96\x01\n\x19GroupMonthlyCostsResponse\x12\x46\n\nmonthCosts\x18\x01 \x03(\x0b\x32\x32.adapter.GroupMonthlyCostsResponse.MonthCostsEntry\x1a\x31\n\x0fMonthCostsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x01:\x02\x38\x01\x32\xa7\n\n\x0c\x43loudAdapter\x12<\n\tGetStatus\x12\x16.adapter.StatusRequest\x1a\x17.adapter.StatusResponse\x12\x63\n\x14GetAvailableServices\x12$.adapter.GetAvailableServicesRequest\x1a%.adapter.GetAvailableServicesResponse\x12_\n\x16\x43reateGroupWithLeaders\x12&.adapter.CreateGroupWithLeadersRequest\x1a\x1d.adapter.GroupCreatedResponse\x12`\n\x13\x43reateUsersForGroup\x12#.adapter.CreateUsersForGroupRequest\x1a$.adapter.CreateUsersForGroupResponse\x12H\n\x0bGroupExists\x12\x1b.adapter.GroupExistsRequest\x1a\x1c.adapter.GroupExistsResponse\x12Q\n\x10GetResourceCount\x12\x1d.adapter.ResourceCountRequest\x1a\x1e.adapter.ResourceCountResponse\x12\x43\n\x14GetTotalCostForGroup\x12\x14.adapter.CostRequest\x1a\x15.adapter.CostResponse\x12Q\n\x19GetTotalCostsForAllGroups\x12\x14.adapter.CostRequest\x1a\x1e.adapter.AllGroupsCostResponse\x12;\n\x0cGetTotalCost\x12\x14.adapter.CostRequest\x1a\x15.adapter.CostResponse\x12q\n GetGroupCostWithServiceBreakdown\x12%.adapter.GroupServiceBreakdownRequest\x1a&.adapter.GroupServiceBreakdownResponse\x12`\n GetTotalCostWithServiceBreakdown\x12\x14.adapter.CostRequest\x1a&.adapter.GroupServiceBreakdownResponse\x12`\n!GetGroupCostsLast6MonthsByService\x12\x1c.adapter.GroupCostMapRequest\x1a\x1d.adapter.GroupCostMapResponse\x12h\n\x1fGetGroupMonthlyCostsLast6Months\x12!.adapter.GroupMonthlyCostsRequest\x1a\".adapter.GroupMonthlyCostsResponse\x12H\n\x0bRemoveGroup\x12\x1b.adapter.RemoveGroupRequest\x1a\x1c.adapter.RemoveGroupResponse\x12T\n\x15\x43leanupGroupResources\x12\x1c.adapter.CleanupGroupRequest\x1a\x1d.adapter.CleanupGroupResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'adapter_interface_pb2', _globals)
 if _descriptor._USE_C_DESCRIPTORS == False:
   DESCRIPTOR._options = None
+  _globals['_GROUPCOSTMAPRESPONSE_COSTSENTRY']._options = None
+  _globals['_GROUPCOSTMAPRESPONSE_COSTSENTRY']._serialized_options = b'8\001'
+  _globals['_GROUPMONTHLYCOSTSRESPONSE_MONTHCOSTSENTRY']._options = None
+  _globals['_GROUPMONTHLYCOSTSRESPONSE_MONTHCOSTSENTRY']._serialized_options = b'8\001'
   _globals['_STATUSREQUEST']._serialized_start=36
   _globals['_STATUSREQUEST']._serialized_end=51
   _globals['_STATUSRESPONSE']._serialized_start=53
@@ -51,6 +55,34 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['_SERVICECOST']._serialized_end=768
   _globals['_GROUPSERVICEBREAKDOWNRESPONSE']._serialized_start=770
   _globals['_GROUPSERVICEBREAKDOWNRESPONSE']._serialized_end=857
-  _globals['_CLOUDADAPTER']._serialized_start=860
-  _globals['_CLOUDADAPTER']._serialized_end=1533
+  _globals['_GETAVAILABLESERVICESREQUEST']._serialized_start=859
+  _globals['_GETAVAILABLESERVICESREQUEST']._serialized_end=888
+  _globals['_GETAVAILABLESERVICESRESPONSE']._serialized_start=890
+  _globals['_GETAVAILABLESERVICESRESPONSE']._serialized_end=938
+  _globals['_RESOURCECOUNTREQUEST']._serialized_start=940
+  _globals['_RESOURCECOUNTREQUEST']._serialized_end=1003
+  _globals['_RESOURCECOUNTRESPONSE']._serialized_start=1005
+  _globals['_RESOURCECOUNTRESPONSE']._serialized_end=1043
+  _globals['_REMOVEGROUPREQUEST']._serialized_start=1045
+  _globals['_REMOVEGROUPREQUEST']._serialized_end=1084
+  _globals['_REMOVEGROUPRESPONSE']._serialized_start=1086
+  _globals['_REMOVEGROUPRESPONSE']._serialized_end=1163
+  _globals['_CLEANUPGROUPREQUEST']._serialized_start=1165
+  _globals['_CLEANUPGROUPREQUEST']._serialized_end=1220
+  _globals['_CLEANUPGROUPRESPONSE']._serialized_start=1222
+  _globals['_CLEANUPGROUPRESPONSE']._serialized_end=1304
+  _globals['_GROUPCOSTMAPREQUEST']._serialized_start=1306
+  _globals['_GROUPCOSTMAPREQUEST']._serialized_end=1346
+  _globals['_GROUPCOSTMAPRESPONSE']._serialized_start=1348
+  _globals['_GROUPCOSTMAPRESPONSE']._serialized_end=1473
+  _globals['_GROUPCOSTMAPRESPONSE_COSTSENTRY']._serialized_start=1429
+  _globals['_GROUPCOSTMAPRESPONSE_COSTSENTRY']._serialized_end=1473
+  _globals['_GROUPMONTHLYCOSTSREQUEST']._serialized_start=1475
+  _globals['_GROUPMONTHLYCOSTSREQUEST']._serialized_end=1520
+  _globals['_GROUPMONTHLYCOSTSRESPONSE']._serialized_start=1523
+  _globals['_GROUPMONTHLYCOSTSRESPONSE']._serialized_end=1673
+  _globals['_GROUPMONTHLYCOSTSRESPONSE_MONTHCOSTSENTRY']._serialized_start=1624
+  _globals['_GROUPMONTHLYCOSTSRESPONSE_MONTHCOSTSENTRY']._serialized_end=1673
+  _globals['_CLOUDADAPTER']._serialized_start=1676
+  _globals['_CLOUDADAPTER']._serialized_end=2995
 # @@protoc_insertion_point(module_scope)
