@@ -7,7 +7,6 @@ from typing import List
 import grpc
 
 from config.settings import validate_config
-from config.policy_manager import PolicyManager
 from identity.user_manager import AzureUserManager
 from identity.group_manager import AzureGroupManager
 from identity.rbac_manager import AzureRBACManager
@@ -32,7 +31,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         self.user_manager = AzureUserManager()
         self.group_manager = AzureGroupManager()
         self.rbac_manager = AzureRBACManager()
-        self.policy_manager = PolicyManager(self.rbac_manager)
+       # self.policy_manager = PolicyManager(self.rbac_manager)
         self.resource_finder = ResourceFinder()
         self.resource_deleter = ResourceDeleter()
 
@@ -51,7 +50,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         Azure equivalent of AWS GetAvailableServices.
         """
         try:
-            services_list = self.policy_manager.get_available_services()
+            # Get available resource types from RBAC manager
+            # These are the resource types that have corresponding RBAC roles configured
+            services_list = list(self.rbac_manager.RESOURCE_TYPE_ROLES.keys())
             response = pb2.GetAvailableServicesResponse()
             response.services.extend(services_list)
             return response
