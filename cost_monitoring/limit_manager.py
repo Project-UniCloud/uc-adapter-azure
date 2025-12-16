@@ -454,12 +454,19 @@ def get_total_costs_for_all_groups(start_date: str, end_date: str = None) -> Dic
                     group_name = str(row[0]) if row[0] else "unknown"
                     cost = float(row[1]) if row[1] else 0.0
                     
-                    # Normalize group name (remove tag prefix if present)
+                    # Remove tag prefix if present (Azure Cost Management API format)
                     if "$" in group_name:
                         group_name = group_name.split("$", 1)[1]
                     
+                    # Note: group_name here is the value from the "Group" tag.
+                    # It may be normalized (with dashes) or original (with spaces).
+                    # Denormalization (dashes -> spaces) is handled in main.py
+                    # to prevent corrupting names that legitimately contain dashes.
+                    
                     group_costs[group_name] = group_costs.get(group_name, 0.0) + cost
         
+        # Return raw group names from tags (may contain dashes or spaces)
+        # main.py will handle safe denormalization for backend compatibility
         return {group: round(cost, 2) for group, cost in group_costs.items()}
     
     except Exception as e:

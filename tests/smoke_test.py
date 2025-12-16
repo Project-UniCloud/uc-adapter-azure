@@ -4,6 +4,14 @@ Ręczny smoke test dla identity.user_manager i identity.group_manager.
 
 """
 
+import sys
+import os
+
+# Add parent directory to path to import modules
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 import time
 
 from config.settings import validate_config
@@ -18,8 +26,8 @@ def main() -> None:
     user_mgr = AzureUserManager()
     group_mgr = AzureGroupManager()
 
-    TEST_GROUP_NAME = "uc-test-group6"
-    TEST_LOGIN = "uc.test.user6"  # wynik uc.test.user5@<twoj_UDOMAIN>
+    TEST_GROUP_NAME = "uc-test-group7"
+    TEST_LOGIN = "uc.test.user7"  # wynik uc.test.user5@<twoj_UDOMAIN>
 
     # 2. Tworzenie grupy
     print(f"[+] Tworzę grupę: {TEST_GROUP_NAME!r}")

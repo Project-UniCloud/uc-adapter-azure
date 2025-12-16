@@ -9,9 +9,17 @@ Comprehensive tests for all 7 required methods:
 6. GetGroupCostsLast6MonthsByService
 7. GetGroupMonthlyCostsLast6Months
 
-Run with: python test_required_methods.py
+Run with: python tests/test_required_methods.py
 Make sure the adapter is running on localhost:50053
 """
+
+import sys
+import os
+
+# Add parent directory to path to import modules
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 import grpc
 from datetime import datetime, timedelta
@@ -34,7 +42,7 @@ def print_test_header(test_num: int, test_name: str):
 def print_result(success: bool, message: str):
     """Print test result"""
     status = "PASS" if success else "FAIL"
-    symbol = "✓" if success else "✗"
+    symbol = "[OK]" if success else "[FAIL]"
     print(f"{symbol} {status}: {message}")
 
 
@@ -51,9 +59,11 @@ def test_1_get_available_services():
         
         # Validate response structure
         assert hasattr(response, 'services'), "Response should have 'services' field"
-        assert isinstance(response.services, (list, tuple)), "services should be a list"
-        
-        services_list = list(response.services)
+        # Protobuf repeated fields are iterable - check by trying to convert to list
+        try:
+            services_list = list(response.services)
+        except (TypeError, AttributeError):
+            assert False, "services should be iterable (can be converted to list)"
         print(f"  Available services: {services_list}")
         print(f"  Count: {len(services_list)}")
         
@@ -61,9 +71,9 @@ def test_1_get_available_services():
         expected_services = ['vm', 'storage', 'network', 'compute']
         for expected in expected_services:
             if expected in services_list:
-                print(f"  ✓ Found expected service: {expected}")
+                print(f"  [OK] Found expected service: {expected}")
             else:
-                print(f"  ⚠ Expected service not found: {expected}")
+                print(f"  [WARN] Expected service not found: {expected}")
         
         print_result(True, f"GetAvailableServices returned {len(services_list)} services")
         return True
@@ -122,7 +132,7 @@ def test_2_get_resource_count():
             return False
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.INVALID_ARGUMENT:
-                print(f"  ✓ Correctly rejected empty resourceType")
+                print(f"  [OK] Correctly rejected empty resourceType")
             else:
                 print_result(False, f"Expected INVALID_ARGUMENT, got {e.code().name}")
                 return False
@@ -162,12 +172,15 @@ def test_3_remove_group():
         assert hasattr(response, 'message'), "Response should have 'message' field"
         
         assert isinstance(response.success, bool), "success should be boolean"
-        assert isinstance(response.removedUsers, (list, tuple)), "removedUsers should be a list"
+        # Protobuf repeated fields are iterable - check by trying to convert to list
+        try:
+            removed_users_list = list(response.removedUsers)
+        except (TypeError, AttributeError):
+            assert False, "removedUsers should be iterable (can be converted to list)"
         assert isinstance(response.message, str), "message should be a string"
-        
         print(f"  Test group: {test_group}")
         print(f"  Success: {response.success}")
-        print(f"  Removed users count: {len(list(response.removedUsers))}")
+        print(f"  Removed users count: {len(removed_users_list)}")
         print(f"  Message: {response.message}")
         
         # Note: We're not actually creating a group here, so we test the idempotent case
@@ -177,7 +190,7 @@ def test_3_remove_group():
         # 3. Then test RemoveGroup
         
         if response.success:
-            print(f"  ✓ RemoveGroup is idempotent (non-existent group returns success)")
+            print(f"  [OK] RemoveGroup is idempotent (non-existent group returns success)")
         
         print_result(True, f"RemoveGroup returned success={response.success}")
         return True
@@ -217,10 +230,12 @@ def test_4_cleanup_group_resources():
         assert hasattr(response, 'message'), "Response should have 'message' field"
         
         assert isinstance(response.success, bool), "success should be boolean"
-        assert isinstance(response.deletedResources, (list, tuple)), "deletedResources should be a list"
+        # Protobuf repeated fields are iterable - check by trying to convert to list
+        try:
+            deleted_list = list(response.deletedResources)
+        except (TypeError, AttributeError):
+            assert False, "deletedResources should be iterable (can be converted to list)"
         assert isinstance(response.message, str), "message should be a string"
-        
-        deleted_list = list(response.deletedResources)
         print(f"  Test group: {test_group}")
         print(f"  Success: {response.success}")
         print(f"  Deleted resources count: {len(deleted_list)}")
@@ -233,7 +248,7 @@ def test_4_cleanup_group_resources():
             if len(deleted_list) > 5:
                 print(f"    ... and {len(deleted_list) - 5} more")
         else:
-            print(f"  ✓ No resources found (expected if group has no resources)")
+            print(f"  [OK] No resources found (expected if group has no resources)")
         
         print_result(True, f"CleanupGroupResources returned success={response.success}")
         return True
@@ -272,9 +287,11 @@ def test_5_get_total_cost_with_service_breakdown():
         assert hasattr(response, 'breakdown'), "Response should have 'breakdown' field"
         
         assert isinstance(response.total, (int, float)), "total should be numeric"
-        assert isinstance(response.breakdown, (list, tuple)), "breakdown should be a list"
-        
-        breakdown_list = list(response.breakdown)
+        # Protobuf repeated fields are iterable - check by trying to convert to list
+        try:
+            breakdown_list = list(response.breakdown)
+        except (TypeError, AttributeError):
+            assert False, "breakdown should be iterable (can be converted to list)"
         print(f"  Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
         print(f"  Total cost: {response.total:.2f}")
         print(f"  Services count: {len(breakdown_list)}")
@@ -288,7 +305,7 @@ def test_5_get_total_cost_with_service_breakdown():
             if len(breakdown_list) > 10:
                 print(f"    ... and {len(breakdown_list) - 10} more services")
         else:
-            print(f"  ⚠ No service breakdown data (may be normal if no costs)")
+            print(f"  [WARN] No service breakdown data (may be normal if no costs)")
         
         print_result(True, f"GetTotalCostWithServiceBreakdown returned total={response.total:.2f}")
         return True
@@ -333,7 +350,7 @@ def test_6_get_group_costs_last_6_months_by_service():
             if len(costs_dict) > 10:
                 print(f"    ... and {len(costs_dict) - 10} more services")
         else:
-            print(f"  ⚠ No costs found (may be normal if group has no resources or costs)")
+            print(f"  [WARN] No costs found (may be normal if group has no resources or costs)")
         
         # Test with empty group name (should fail)
         try:
@@ -343,7 +360,7 @@ def test_6_get_group_costs_last_6_months_by_service():
             return False
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.INVALID_ARGUMENT:
-                print(f"  ✓ Correctly rejected empty groupName")
+                print(f"  [OK] Correctly rejected empty groupName")
             else:
                 print_result(False, f"Expected INVALID_ARGUMENT, got {e.code().name}")
                 return False
@@ -389,7 +406,7 @@ def test_7_get_group_monthly_costs_last_6_months():
             for month, cost in sorted_months:
                 print(f"    - {month}: {cost:.2f}")
         else:
-            print(f"  ⚠ No monthly costs found (may be normal if group has no resources or costs)")
+            print(f"  [WARN] No monthly costs found (may be normal if group has no resources or costs)")
         
         # Test with empty group name (should fail)
         try:
@@ -399,7 +416,7 @@ def test_7_get_group_monthly_costs_last_6_months():
             return False
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.INVALID_ARGUMENT:
-                print(f"  ✓ Correctly rejected empty groupName")
+                print(f"  [OK] Correctly rejected empty groupName")
             else:
                 print_result(False, f"Expected INVALID_ARGUMENT, got {e.code().name}")
                 return False
@@ -449,15 +466,15 @@ def main():
     
     for test_name, result in results:
         status = "PASS" if result else "FAIL"
-        symbol = "✓" if result else "✗"
+        symbol = "[OK]" if result else "[FAIL]"
         print(f"{symbol} {test_name}: {status}")
     
     print(f"\nTotal: {passed}/{total} tests passed")
     
     if passed == total:
-        print("\n✓ All tests passed! All required methods are working correctly.")
+        print("\n[OK] All tests passed! All required methods are working correctly.")
     else:
-        print(f"\n⚠ {total - passed} test(s) failed. Review output above for details.")
+        print(f"\n[WARN] {total - passed} test(s) failed. Review output above for details.")
     
     return passed == total
 
@@ -474,4 +491,5 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         exit(1)
+
 

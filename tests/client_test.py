@@ -1,5 +1,14 @@
 # client_test.py
+import sys
+import os
+
+# Add parent directory to path to import modules
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 import grpc
+import time
 from datetime import datetime
 
 from protos import adapter_interface_pb2 as pb2
@@ -62,6 +71,12 @@ def main() -> None:
             print("  ⚠ Group not found (may need time to replicate)")
     except grpc.RpcError as e:
         print(f"  ✗ GroupExists RPC error: code={e.code().name}, details={e.details()}")
+
+    # 3.5) Krótkie oczekiwanie na replikację Azure AD (jeśli grupa została utworzona)
+    # CreateUsersForGroup ma retry logic, ale dodanie opóźnienia tutaj pomaga
+    if create_group_resp.groupName:
+        print("\n  Waiting 3 seconds for Azure AD replication...")
+        time.sleep(3)
 
     # 4) Dodanie studentów do istniejącej grupy
     print("\n== CreateUsersForGroup ==")

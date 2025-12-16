@@ -4,6 +4,14 @@ Tests Azure adapter using the same format and data structures as the backend.
 Validates that responses match backend expectations for proper integration.
 """
 
+import sys
+import os
+
+# Add parent directory to path to import modules
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 import grpc
 from datetime import datetime, timedelta
 from protos import adapter_interface_pb2 as pb2
