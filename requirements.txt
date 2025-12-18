@@ -1,6 +1,5 @@
 # Podstawy konfiguracji i środowiska
 python-dotenv
-requests
 
 # Microsoft Graph (używamy 0.2.2 bo nowsze wersje zmieniły API - GraphClient jest w msgraph.core)
 msgraph-core==0.2.2
