@@ -72,13 +72,18 @@ class CloudAdapterStub(object):
                 )
         self.GetGroupCostsLast6MonthsByService = channel.unary_unary(
                 '/adapter.CloudAdapter/GetGroupCostsLast6MonthsByService',
-                request_serializer=adapter__interface__pb2.GroupCostMapRequest.SerializeToString,
+                request_serializer=adapter__interface__pb2.GroupLast6MonthsCostRequest.SerializeToString,
                 response_deserializer=adapter__interface__pb2.GroupCostMapResponse.FromString,
                 )
         self.GetGroupMonthlyCostsLast6Months = channel.unary_unary(
                 '/adapter.CloudAdapter/GetGroupMonthlyCostsLast6Months',
-                request_serializer=adapter__interface__pb2.GroupMonthlyCostsRequest.SerializeToString,
+                request_serializer=adapter__interface__pb2.GroupLast6MonthsCostRequest.SerializeToString,
                 response_deserializer=adapter__interface__pb2.GroupMonthlyCostsResponse.FromString,
+                )
+        self.AssignPolicies = channel.unary_unary(
+                '/adapter.CloudAdapter/AssignPolicies',
+                request_serializer=adapter__interface__pb2.AssignPoliciesRequest.SerializeToString,
+                response_deserializer=adapter__interface__pb2.AssignPoliciesResponse.FromString,
                 )
         self.RemoveGroup = channel.unary_unary(
                 '/adapter.CloudAdapter/RemoveGroup',
@@ -174,6 +179,12 @@ class CloudAdapterServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def AssignPolicies(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def RemoveGroup(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -246,13 +257,18 @@ def add_CloudAdapterServicer_to_server(servicer, server):
             ),
             'GetGroupCostsLast6MonthsByService': grpc.unary_unary_rpc_method_handler(
                     servicer.GetGroupCostsLast6MonthsByService,
-                    request_deserializer=adapter__interface__pb2.GroupCostMapRequest.FromString,
+                    request_deserializer=adapter__interface__pb2.GroupLast6MonthsCostRequest.FromString,
                     response_serializer=adapter__interface__pb2.GroupCostMapResponse.SerializeToString,
             ),
             'GetGroupMonthlyCostsLast6Months': grpc.unary_unary_rpc_method_handler(
                     servicer.GetGroupMonthlyCostsLast6Months,
-                    request_deserializer=adapter__interface__pb2.GroupMonthlyCostsRequest.FromString,
+                    request_deserializer=adapter__interface__pb2.GroupLast6MonthsCostRequest.FromString,
                     response_serializer=adapter__interface__pb2.GroupMonthlyCostsResponse.SerializeToString,
+            ),
+            'AssignPolicies': grpc.unary_unary_rpc_method_handler(
+                    servicer.AssignPolicies,
+                    request_deserializer=adapter__interface__pb2.AssignPoliciesRequest.FromString,
+                    response_serializer=adapter__interface__pb2.AssignPoliciesResponse.SerializeToString,
             ),
             'RemoveGroup': grpc.unary_unary_rpc_method_handler(
                     servicer.RemoveGroup,
@@ -474,7 +490,7 @@ class CloudAdapter(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetGroupCostsLast6MonthsByService',
-            adapter__interface__pb2.GroupCostMapRequest.SerializeToString,
+            adapter__interface__pb2.GroupLast6MonthsCostRequest.SerializeToString,
             adapter__interface__pb2.GroupCostMapResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
@@ -491,8 +507,25 @@ class CloudAdapter(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/GetGroupMonthlyCostsLast6Months',
-            adapter__interface__pb2.GroupMonthlyCostsRequest.SerializeToString,
+            adapter__interface__pb2.GroupLast6MonthsCostRequest.SerializeToString,
             adapter__interface__pb2.GroupMonthlyCostsResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def AssignPolicies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/adapter.CloudAdapter/AssignPolicies',
+            adapter__interface__pb2.AssignPoliciesRequest.SerializeToString,
+            adapter__interface__pb2.AssignPoliciesResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 

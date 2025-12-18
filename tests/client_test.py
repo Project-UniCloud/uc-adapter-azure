@@ -39,21 +39,21 @@ def main() -> None:
     print(f"  Leaders: {leaders}")
     try:
         create_group_req = pb2.CreateGroupWithLeadersRequest(
-            resourceType="vm",   # backend i tak tego używa głównie jako stringa
+            resourceTypes=["vm"],   # Changed to resourceTypes (repeated) to match proto
             leaders=leaders,
             groupName=group_name,
         )
         create_group_resp = stub.CreateGroupWithLeaders(create_group_req)
         print(f"  Response: groupName={create_group_resp.groupName}")
-        print("  ✓ Group created successfully")
+        print("  [OK] Group created successfully")
     except grpc.RpcError as e:
         error_msg = str(e.details())
         if "already exists" in error_msg or "ObjectConflict" in error_msg:
-            print(f"  ⚠ Warning: User may already exist: {error_msg}")
+            print(f"  [WARN] Warning: User may already exist: {error_msg}")
             print("  Continuing with other tests...")
         else:
             print(
-                f"  ✗ CreateGroupWithLeaders RPC error: "
+                f"  [FAIL] CreateGroupWithLeaders RPC error: "
                 f"code={e.code().name}, details={e.details()}"
             )
             # Jeśli to się wywali, dalsze testy i tak nie mają sensu
@@ -66,11 +66,11 @@ def main() -> None:
         exists_resp = stub.GroupExists(exists_req)
         print(f"  GroupExists({group_name!r}) -> {exists_resp.exists}")
         if exists_resp.exists:
-            print("  ✓ Group exists")
+            print("  [OK] Group exists")
         else:
-            print("  ⚠ Group not found (may need time to replicate)")
+            print("  [WARN] Group not found (may need time to replicate)")
     except grpc.RpcError as e:
-        print(f"  ✗ GroupExists RPC error: code={e.code().name}, details={e.details()}")
+        print(f"  [FAIL] GroupExists RPC error: code={e.code().name}, details={e.details()}")
 
     # 3.5) Krótkie oczekiwanie na replikację Azure AD (jeśli grupa została utworzona)
     # CreateUsersForGroup ma retry logic, ale dodanie opóźnienia tutaj pomaga
@@ -88,14 +88,14 @@ def main() -> None:
         )
         create_users_resp = stub.CreateUsersForGroup(create_users_req)
         print(f"  Response: {create_users_resp.message}")
-        print("  ✓ Users created successfully")
+        print("  [OK] Users created successfully")
     except grpc.RpcError as e:
         error_msg = str(e.details())
         if "already exists" in error_msg or "ObjectConflict" in error_msg:
-            print(f"  ⚠ Warning: Users may already exist: {error_msg}")
+            print(f"  [WARN] Warning: Users may already exist: {error_msg}")
         else:
             print(
-                f"  ✗ CreateUsersForGroup RPC error: "
+                f"  [FAIL] CreateUsersForGroup RPC error: "
                 f"code={e.code().name}, details={e.details()}"
             )
     
@@ -106,7 +106,7 @@ def main() -> None:
         print(f"  Available services: {list(services_resp.services)}")
         print(f"  Count: {len(services_resp.services)}")
     except grpc.RpcError as e:
-        print(f"  ✗ GetAvailableServices RPC error: code={e.code().name}, details={e.details()}")
+        print(f"  [FAIL] GetAvailableServices RPC error: code={e.code().name}, details={e.details()}")
     
     # 6) Test GetResourceCount
     print("\n== GetResourceCount ==")
@@ -115,7 +115,7 @@ def main() -> None:
         count_resp = stub.GetResourceCount(count_req)
         print(f"  Resource count (vm): {count_resp.count}")
     except grpc.RpcError as e:
-        print(f"  ✗ GetResourceCount RPC error: code={e.code().name}, details={e.details()}")
+        print(f"  [FAIL] GetResourceCount RPC error: code={e.code().name}, details={e.details()}")
     
     print("\n== Test Summary ==")
     print("  Note: If you see 'already exists' warnings, users/groups from previous tests")

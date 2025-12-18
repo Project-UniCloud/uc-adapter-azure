@@ -79,25 +79,27 @@ def test_create_group_with_leaders():
     print("-" * 50)
     
     # Backend sends:
-    # - resourceType: CloudResourceType.getName() (e.g., "vm", "ec2", "s3")
+    # - resourceTypes: List of CloudResourceType.getName() (e.g., ["vm"], ["ec2"], ["s3"])
+    #   Backend uses .addAllResourceTypes() which sends repeated string
     # - groupName: GroupUniqueName.toString() (e.g., "AI 2024L")
     # - leaders: List<UserLogin> mapped to strings
     
     test_request = pb2.CreateGroupWithLeadersRequest(
-        resourceType="vm",  # Backend sends resource type name
+        resourceTypes=["vm"],  # Backend sends repeated string resourceTypes
         groupName="AI 2024L",  # Backend sends GroupUniqueName.toString() format
         leaders=["s481873", "s485704"]  # Backend sends UserLogin.toString()
     )
     
     try:
         # Validate request format matches backend expectations
-        assert test_request.resourceType == "vm", "Resource type should be 'vm'"
+        assert len(test_request.resourceTypes) == 1, "Should have 1 resource type"
+        assert test_request.resourceTypes[0] == "vm", "Resource type should be 'vm'"
         assert test_request.groupName == "AI 2024L", "Group name should match backend format"
         assert len(test_request.leaders) == 2, "Should have 2 leaders"
         assert "s481873" in test_request.leaders, "Leader should be in list"
         
         print("PASS: Request format matches backend expectations")
-        print(f"      resourceType: {test_request.resourceType}")
+        print(f"      resourceTypes: {list(test_request.resourceTypes)}")
         print(f"      groupName: {test_request.groupName}")
         print(f"      leaders: {test_request.leaders}")
         print("\n      Note: Not creating actual group (would require Azure credentials)")

@@ -15,8 +15,9 @@ service CloudAdapter {
   rpc GetTotalCost(CostRequest) returns (CostResponse);
   rpc GetGroupCostWithServiceBreakdown(GroupServiceBreakdownRequest) returns (GroupServiceBreakdownResponse);
   rpc GetTotalCostWithServiceBreakdown(CostRequest) returns (GroupServiceBreakdownResponse);
-  rpc GetGroupCostsLast6MonthsByService(GroupCostMapRequest) returns (GroupCostMapResponse);
-  rpc GetGroupMonthlyCostsLast6Months(GroupMonthlyCostsRequest) returns (GroupMonthlyCostsResponse);
+  rpc GetGroupCostsLast6MonthsByService(GroupLast6MonthsCostRequest) returns (GroupCostMapResponse);
+  rpc GetGroupMonthlyCostsLast6Months(GroupLast6MonthsCostRequest) returns (GroupMonthlyCostsResponse);
+  rpc AssignPolicies(AssignPoliciesRequest) returns (AssignPoliciesResponse);
   rpc RemoveGroup(RemoveGroupRequest) returns (RemoveGroupResponse);
   rpc CleanupGroupResources(CleanupGroupRequest) returns (CleanupGroupResponse);
 }
@@ -30,7 +31,7 @@ message StatusResponse {
 
 // === Group Management ===
 message CreateGroupWithLeadersRequest {
-  string resourceType = 1;
+  repeated string resourceTypes = 1;  // Changed from resourceType to resourceTypes (repeated) for backend compatibility
   repeated string leaders = 2;
   string groupName = 3;
 }
@@ -134,6 +135,10 @@ message CleanupGroupResponse {
 }
 
 // === Historical Cost Queries ===
+message GroupLast6MonthsCostRequest {
+  string groupName = 1;
+}
+
 message GroupCostMapRequest {
   string groupName = 1;
 }
@@ -148,4 +153,16 @@ message GroupMonthlyCostsRequest {
 
 message GroupMonthlyCostsResponse {
   map<string, double> monthCosts = 1;
+}
+
+// === Policy Assignment ===
+message AssignPoliciesRequest {
+  repeated string resourceTypes = 1;
+  string groupName = 2;  // optional
+  string userName = 3;   // optional
+}
+
+message AssignPoliciesResponse {
+  bool success = 1;
+  string message = 2;
 }

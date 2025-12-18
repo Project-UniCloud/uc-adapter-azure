@@ -120,6 +120,10 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def CleanupGroupResources(self, request, context):
         """Removes all Azure resources associated with a group."""
         return self.resource_handler.cleanup_group_resources(request, context)
+    
+    def AssignPolicies(self, request, context):
+        """Assigns RBAC policies to a group or user."""
+        return self.identity_handler.assign_policies(request, context)
 
 
 def serve():

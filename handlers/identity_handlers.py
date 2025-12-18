@@ -331,12 +331,15 @@ class IdentityHandlers:
         Tworzy grupę + liderów, zapisuje ich jako członków grupy
         oraz ustawia liderów jako właścicieli (owners) tej grupy.
 
-        Używa resourceType do przypisania odpowiednich uprawnień RBAC (matches AWS adapter behavior).
+        Używa resourceTypes (lista) do przypisania odpowiednich uprawnień RBAC
         Dodaje suffix grupy do username liderów (matches AWS adapter format).
         """
         group_name: str = request.groupName
-        resource_type: str = request.resourceType
+        resource_types: List[str] = list(request.resourceTypes)  # Changed from resourceType to resourceTypes
         leaders: List[str] = list(request.leaders)
+        
+        # Backend może wysłać listę, ale używamy pierwszego typu (zgodnie z AWS adapter behavior)
+        resource_type: str = resource_types[0] if resource_types else ""
 
         normalized_group_name = normalize_name(group_name)
 
@@ -514,4 +517,73 @@ class IdentityHandlers:
             response.success = False
             response.message = str(e)
             return response
+    
+    def assign_policies(self, request, context):
+        """
+        Assigns RBAC policies to a group or user.
+        Backend uses this to assign resource access permissions.
+        """
+        try:
+            resource_types = list(request.resourceTypes)
+            group_name = request.groupName if request.groupName else None
+            user_name = request.userName if request.userName else None
+            
+            if not resource_types:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Resource types list cannot be empty")
+                return pb2.AssignPoliciesResponse(success=False, message="Resource types list cannot be empty")
+            
+            if not group_name and not user_name:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Either groupName or userName must be provided")
+                return pb2.AssignPoliciesResponse(success=False, message="Either groupName or userName must be provided")
+            
+            # Assign RBAC roles for each resource type
+            assigned_roles = []
+            for resource_type in resource_types:
+                try:
+                    if group_name:
+                        normalized_group_name = normalize_name(group_name)
+                        group = self.group_manager.get_group_by_name(normalized_group_name)
+                        if not group:
+                            logger.warning(f"Group '{normalized_group_name}' not found for policy assignment")
+                            continue
+                        
+                        success = self.rbac_manager.assign_role_to_group(
+                            resource_type=resource_type,
+                            group_id=group["id"]
+                        )
+                        if success:
+                            assigned_roles.append(f"{resource_type}->{group_name}")
+                            logger.info(f"Assigned RBAC role for '{resource_type}' to group '{group_name}'")
+                        else:
+                            logger.warning(f"Failed to assign RBAC role for '{resource_type}' to group '{group_name}'")
+                    
+                    # Note: User-level policy assignment not implemented yet
+                    # Azure RBAC typically uses group-based assignments
+                    if user_name:
+                        logger.warning(f"User-level policy assignment not yet implemented for '{user_name}'")
+                
+                except Exception as e:
+                    logger.error(f"Error assigning policy for resource type '{resource_type}': {e}", exc_info=True)
+                    # Continue with other resource types
+            
+            if assigned_roles:
+                response = pb2.AssignPoliciesResponse(
+                    success=True,
+                    message=f"Policies assigned successfully: {', '.join(assigned_roles)}"
+                )
+                return response
+            else:
+                response = pb2.AssignPoliciesResponse(
+                    success=False,
+                    message="No policies were assigned. Check if group exists and resource types are valid."
+                )
+                return response
+        
+        except Exception as e:
+            logger.error(f"[AssignPolicies] Error: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.AssignPoliciesResponse(success=False, message=str(e))
 

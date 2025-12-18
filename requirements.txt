@@ -2,7 +2,7 @@
 python-dotenv
 requests
 
-# Microsoft Graph
+# Microsoft Graph (używamy 0.2.2 bo nowsze wersje zmieniły API - GraphClient jest w msgraph.core)
 msgraph-core==0.2.2
 
 # Uwierzytelnianie i SDK Azure
@@ -14,7 +14,7 @@ azure-mgmt-costmanagement
 azure-mgmt-authorization
 azure-mgmt-storage
 
-# gRPC + Protobuf (dobrane wersje działające na Win + Python 3.11)
-grpcio==1.62.2
-grpcio-tools==1.62.2
-protobuf==4.25.3
+# gRPC + Protobuf (zaktualizowane do najnowszych wersji kompatybilnych z protobuf 6.x)
+grpcio>=1.76.0
+grpcio-tools>=1.76.0
+protobuf>=6.31.1
