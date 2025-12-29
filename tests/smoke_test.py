@@ -31,9 +31,10 @@ def main() -> None:
 
     # 2. Tworzenie grupy
     print(f"[+] Tworzę grupę: {TEST_GROUP_NAME!r}")
-    group_id = group_mgr.create_group(
+    group_id, resource_group_name = group_mgr.create_group(
         TEST_GROUP_NAME,
         description="UC adapter smoke test",
+        create_resource_group=False,  # Nie tworzymy RG w teście
     )
     print(f"    -> group_id = {group_id}")
 

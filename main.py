@@ -124,6 +124,15 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def AssignPolicies(self, request, context):
         """Assigns RBAC policies to a group or user."""
         return self.identity_handler.assign_policies(request, context)
+    
+    def UpdateGroupLeaders(self, request, context):
+        """
+        Updates leaders for an existing group (synchronizes: removes old, adds new).
+        
+        NOTE: Currently uses CreateGroupWithLeadersRequest/Response from protobuf.
+        In the future, a dedicated UpdateGroupLeadersRequest/Response should be added to protobuf.
+        """
+        return self.identity_handler.update_group_leaders(request, context)
 
 
 def serve():

@@ -344,30 +344,34 @@ class IdentityHandlers:
         normalized_group_name = normalize_name(group_name)
 
         try:
-            # Tworzymy grupę w Entra ID
-            group_id = self.group_manager.create_group(name=normalized_group_name)
+            # Tworzymy grupę w Entra ID (z Resource Group)
+            group_id, resource_group_name = self.group_manager.create_group(
+                name=normalized_group_name,
+                create_resource_group=True
+            )
             created_leaders: List[tuple[str, str]] = []
 
             # Assign RBAC role based on resource type
             try:
-                success = self.rbac_manager.assign_role_to_group(
+                success, reason = self.rbac_manager.assign_role_to_group(
                     resource_type=resource_type,
                     group_id=group_id,
                 )
                 if success:
                     logger.info(
-                        f"Assigned RBAC role for resource type '{resource_type}' "
+                        f"[CreateGroupWithLeaders] Assigned RBAC role for resource type '{resource_type}' "
                         f"to group '{normalized_group_name}'"
                     )
                 else:
                     logger.warning(
-                        f"RBAC role assignment for resource type '{resource_type}' "
-                        f"to group '{normalized_group_name}' failed or was skipped"
+                        f"[CreateGroupWithLeaders] RBAC role assignment for resource type '{resource_type}' "
+                        f"to group '{normalized_group_name}' failed: {reason}"
                     )
             except Exception as e:
                 logger.warning(
-                    f"Failed to assign RBAC role for resource type '{resource_type}' "
-                    f"to group '{normalized_group_name}': {e}"
+                    f"[CreateGroupWithLeaders] Exception assigning RBAC role for resource type '{resource_type}' "
+                    f"to group '{normalized_group_name}': {e}",
+                    exc_info=True
                 )
 
             for leader_login in leaders:
@@ -467,6 +471,11 @@ class IdentityHandlers:
         """
         Usuwa grupę i wszystkich jej członków (użytkowników).
         Backend expects this method (called when group is deleted).
+        
+        Kolejność operacji (ważne dla cleanup):
+        1. Najpierw usuwa zasoby Azure (cleanup_group_resources)
+        2. Potem usuwa użytkowników
+        3. Na końcu usuwa grupę Entra ID
         """
         group_name: str = request.groupName
         normalized_group_name = normalize_name(group_name)
@@ -483,7 +492,75 @@ class IdentityHandlers:
             group_id = group["id"]
             removed_users = []
             
-            # Get all members and delete them
+            # KROK 1: Cleanup zasobów Azure PRZED usunięciem grupy Entra
+            logger.info(
+                f"[RemoveGroup] Step 1: Cleaning up Azure resources for group '{normalized_group_name}'..."
+            )
+            try:
+                # Znajdź zasoby po tagach
+                resources = self.resource_finder.find_resources_by_tags({"Group": normalized_group_name})
+                logger.info(
+                    f"[RemoveGroup] Found {len(resources)} resources with tag Group={normalized_group_name}"
+                )
+                
+                # Usuń zasoby
+                for resource in resources:
+                    try:
+                        result_msg = self.resource_deleter.delete_resource(resource)
+                        logger.info(f"[RemoveGroup] Deleted resource: {result_msg}")
+                    except Exception as e:
+                        logger.warning(
+                            f"[RemoveGroup] Error deleting resource {resource.get('name', 'unknown')}: {e}",
+                            exc_info=True
+                        )
+                
+                # Fallback: spróbuj usunąć Resource Group jeśli nie znaleziono zasobów po tagach
+                if not resources:
+                    resource_group_name = f"rg-{normalized_group_name}"
+                    logger.info(
+                        f"[RemoveGroup] No resources found by tags. "
+                        f"Trying fallback: delete Resource Group '{resource_group_name}'"
+                    )
+                    try:
+                        from azure_clients import get_resource_client
+                        resource_client = get_resource_client()
+                        try:
+                            rg = resource_client.resource_groups.get(resource_group_name)
+                            if rg:
+                                logger.info(
+                                    f"[RemoveGroup] Deleting Resource Group '{resource_group_name}' "
+                                    f"(this will delete all resources in the RG)..."
+                                )
+                                resource_client.resource_groups.begin_delete(resource_group_name).wait()
+                                logger.info(
+                                    f"[RemoveGroup] Successfully deleted Resource Group '{resource_group_name}'"
+                                )
+                        except Exception:
+                            # RG nie istnieje - to OK
+                            logger.info(
+                                f"[RemoveGroup] Resource Group '{resource_group_name}' does not exist"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"[RemoveGroup] Error during fallback Resource Group deletion: {e}",
+                            exc_info=True
+                        )
+                
+                logger.info(
+                    f"[RemoveGroup] Step 1 completed: Cleaned up Azure resources for group '{normalized_group_name}'"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[RemoveGroup] Error during resource cleanup: {e}. "
+                    f"Continuing with user and group deletion...",
+                    exc_info=True
+                )
+                # Nie przerywamy - kontynuujemy z usuwaniem użytkowników i grupy
+            
+            # KROK 2: Get all members and delete them
+            logger.info(
+                f"[RemoveGroup] Step 2: Removing users from group '{normalized_group_name}'..."
+            )
             members = self.group_manager.list_members(group_id)
             for member in members:
                 if member.get("objectType") == "User":
@@ -495,18 +572,29 @@ class IdentityHandlers:
                             # Delete user
                             self.user_manager.delete_user(user_principal_name)
                             removed_users.append(user_principal_name)
-                            logger.info(f"Removed user '{user_principal_name}' from group and Azure AD")
+                            logger.info(
+                                f"[RemoveGroup] Removed user '{user_principal_name}' from group and Azure AD"
+                            )
                         except Exception as e:
-                            logger.warning(f"Failed to delete user {user_principal_name}: {e}")
-
-            # Delete the group
+                            logger.warning(f"[RemoveGroup] Failed to delete user {user_principal_name}: {e}")
+            
+            # KROK 3: Delete the group (na końcu, po zasobach i użytkownikach)
+            logger.info(
+                f"[RemoveGroup] Step 3: Deleting Entra ID group '{normalized_group_name}'..."
+            )
             self.group_manager.delete_group(group_id)
             
             response = pb2.RemoveGroupResponse()
             response.success = True
             response.removedUsers.extend(removed_users)
-            response.message = f"Group '{normalized_group_name}' and its members have been removed"
-            logger.info(f"Removed group '{normalized_group_name}' and {len(removed_users)} members")
+            response.message = (
+                f"Group '{normalized_group_name}' and its members have been removed. "
+                f"Azure resources cleaned up."
+            )
+            logger.info(
+                f"[RemoveGroup] Successfully removed group '{normalized_group_name}' "
+                f"and {len(removed_users)} members. Azure resources cleaned up."
+            )
             return response
 
         except Exception as e:
@@ -538,52 +626,262 @@ class IdentityHandlers:
                 context.set_details("Either groupName or userName must be provided")
                 return pb2.AssignPoliciesResponse(success=False, message="Either groupName or userName must be provided")
             
+            # Walidacja: sprawdź czy wszystkie resource_types są w RESOURCE_TYPE_ROLES
+            available_types = set(self.rbac_manager.RESOURCE_TYPE_ROLES.keys())
+            invalid_types = [rt for rt in resource_types if rt not in available_types]
+            
+            if invalid_types:
+                available_list = ", ".join(sorted(available_types))
+                error_msg = (
+                    f"Invalid resource types: {', '.join(invalid_types)}. "
+                    f"Available resource types: {available_list}"
+                )
+                logger.error(f"[AssignPolicies] {error_msg}")
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(error_msg)
+                return pb2.AssignPoliciesResponse(success=False, message=error_msg)
+            
             # Assign RBAC roles for each resource type
             assigned_roles = []
+            failed_assignments = []
+            
             for resource_type in resource_types:
                 try:
                     if group_name:
                         normalized_group_name = normalize_name(group_name)
                         group = self.group_manager.get_group_by_name(normalized_group_name)
                         if not group:
-                            logger.warning(f"Group '{normalized_group_name}' not found for policy assignment")
+                            error_msg = f"Group '{normalized_group_name}' not found for policy assignment"
+                            logger.warning(f"[AssignPolicies] {error_msg}")
+                            failed_assignments.append(f"{resource_type}: {error_msg}")
                             continue
                         
-                        success = self.rbac_manager.assign_role_to_group(
+                        success, reason = self.rbac_manager.assign_role_to_group(
                             resource_type=resource_type,
                             group_id=group["id"]
                         )
                         if success:
                             assigned_roles.append(f"{resource_type}->{group_name}")
-                            logger.info(f"Assigned RBAC role for '{resource_type}' to group '{group_name}'")
+                            logger.info(
+                                f"[AssignPolicies] Successfully assigned RBAC role for "
+                                f"'{resource_type}' to group '{group_name}'"
+                            )
                         else:
-                            logger.warning(f"Failed to assign RBAC role for '{resource_type}' to group '{group_name}'")
+                            error_msg = f"Failed to assign RBAC role for '{resource_type}' to group '{group_name}': {reason}"
+                            logger.warning(f"[AssignPolicies] {error_msg}")
+                            failed_assignments.append(f"{resource_type}: {reason}")
                     
                     # Note: User-level policy assignment not implemented yet
                     # Azure RBAC typically uses group-based assignments
                     if user_name:
-                        logger.warning(f"User-level policy assignment not yet implemented for '{user_name}'")
+                        logger.warning(f"[AssignPolicies] User-level policy assignment not yet implemented for '{user_name}'")
+                        failed_assignments.append(f"{resource_type}: User-level assignment not implemented")
                 
                 except Exception as e:
-                    logger.error(f"Error assigning policy for resource type '{resource_type}': {e}", exc_info=True)
+                    error_msg = f"Exception assigning policy for resource type '{resource_type}': {str(e)}"
+                    logger.error(f"[AssignPolicies] {error_msg}", exc_info=True)
+                    failed_assignments.append(f"{resource_type}: {str(e)}")
                     # Continue with other resource types
             
             if assigned_roles:
-                response = pb2.AssignPoliciesResponse(
-                    success=True,
-                    message=f"Policies assigned successfully: {', '.join(assigned_roles)}"
-                )
+                message = f"Policies assigned successfully: {', '.join(assigned_roles)}"
+                if failed_assignments:
+                    message += f". Some assignments failed: {', '.join(failed_assignments)}"
+                response = pb2.AssignPoliciesResponse(success=True, message=message)
                 return response
             else:
-                response = pb2.AssignPoliciesResponse(
-                    success=False,
-                    message="No policies were assigned. Check if group exists and resource types are valid."
+                # Wszystkie przypisania się nie powiodły
+                error_details = "; ".join(failed_assignments) if failed_assignments else "Unknown error"
+                error_msg = (
+                    f"No policies were assigned. Check if group exists and resource types are valid. "
+                    f"Details: {error_details}"
                 )
+                logger.error(f"[AssignPolicies] {error_msg}")
+                response = pb2.AssignPoliciesResponse(success=False, message=error_msg)
                 return response
         
         except Exception as e:
-            logger.error(f"[AssignPolicies] Error: {e}", exc_info=True)
+            logger.error(f"[AssignPolicies] Unexpected error: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
-            return pb2.AssignPoliciesResponse(success=False, message=str(e))
+            return pb2.AssignPoliciesResponse(success=False, message=f"Internal error: {str(e)}")
+    
+    def update_group_leaders(self, request, context):
+        """
+        Synchronizuje liderów dla istniejącej grupy.
+        Wykonuje pełną synchronizację: usuwa starych liderów, dodaje nowych.
+        
+        Uwaga: Używa CreateGroupWithLeadersRequest/Response tymczasowo.
+        W przyszłości powinien być dedykowany UpdateGroupLeadersRequest/Response w protobuf.
+        """
+        group_name: str = request.groupName
+        resource_types: List[str] = list(request.resourceTypes)
+        new_leaders: List[str] = list(request.leaders)
+        
+        # Używamy pierwszego resource_type (zgodnie z AWS adapter behavior)
+        resource_type: str = resource_types[0] if resource_types else ""
+        normalized_group_name = normalize_name(group_name)
+        
+        try:
+            # Sprawdź czy grupa istnieje
+            group = self.group_manager.get_group_by_name(normalized_group_name)
+            if not group:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details(f"Group '{normalized_group_name}' does not exist")
+                return pb2.GroupCreatedResponse()
+            
+            group_id = group["id"]
+            
+            # KROK 1: Pobierz aktualną listę liderów (owners)
+            current_owner_ids = self.group_manager.list_owners(group_id)
+            logger.info(
+                f"[UpdateGroupLeaders] Current owners for group '{normalized_group_name}': {len(current_owner_ids)}"
+            )
+            
+            # Mapuj current_owner_ids do loginów (potrzebujemy do porównania)
+            # Pobierz dane użytkowników żeby znaleźć ich loginy
+            current_leader_logins = set()
+            owner_id_to_login = {}
+            
+            for owner_id in current_owner_ids:
+                try:
+                    # Pobierz dane użytkownika z Graph API
+                    from msgraph.core import GraphClient
+                    from azure_clients import get_graph_client
+                    graph = get_graph_client()
+                    resp = graph.get(f"/users/{owner_id}")
+                    if resp.status_code == 200:
+                        user_data = resp.json()
+                        # Usuń suffix grupy z username jeśli istnieje
+                        upn = user_data.get("userPrincipalName", "")
+                        login = upn.split("@")[0] if "@" in upn else upn
+                        # Usuń suffix "-{group_name}" jeśli istnieje
+                        if login.endswith(f"-{normalized_group_name}"):
+                            login = login[:-(len(normalized_group_name) + 1)]
+                        current_leader_logins.add(login)
+                        owner_id_to_login[owner_id] = login
+                except Exception as e:
+                    logger.warning(
+                        f"[UpdateGroupLeaders] Could not get user data for owner_id {owner_id}: {e}"
+                    )
+                    # Użyj owner_id jako fallback
+                    current_leader_logins.add(owner_id)
+                    owner_id_to_login[owner_id] = owner_id
+            
+            # KROK 2: Oblicz diff
+            new_leaders_set = set(new_leaders)
+            to_add = new_leaders_set - current_leader_logins
+            to_remove = current_leader_logins - new_leaders_set
+            
+            logger.info(
+                f"[UpdateGroupLeaders] Diff for group '{normalized_group_name}': "
+                f"to_add={list(to_add)}, to_remove={list(to_remove)}"
+            )
+            
+            # KROK 3: Usuń starych liderów
+            for leader_login in to_remove:
+                # Znajdź owner_id dla tego loginu
+                owner_id = None
+                for oid, login in owner_id_to_login.items():
+                    if login == leader_login:
+                        owner_id = oid
+                        break
+                
+                if owner_id:
+                    try:
+                        # Usuń z owners
+                        self.group_manager.remove_owner(group_id, owner_id)
+                        logger.info(
+                            f"[UpdateGroupLeaders] Removed owner '{leader_login}' (id: {owner_id}) "
+                            f"from group '{normalized_group_name}'"
+                        )
+                        
+                        # Usuń RBAC role assignments dla tego użytkownika
+                        removed_assignments = self.rbac_manager.remove_role_assignments_for_user(owner_id)
+                        if removed_assignments > 0:
+                            logger.info(
+                                f"[UpdateGroupLeaders] Removed {removed_assignments} RBAC role assignment(s) "
+                                f"for old leader '{leader_login}'"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"[UpdateGroupLeaders] Error removing old leader '{leader_login}': {e}",
+                            exc_info=True
+                        )
+            
+            # KROK 4: Dodaj nowych liderów
+            for leader_login in to_add:
+                try:
+                    username_with_suffix = build_username_with_group_suffix(leader_login, group_name)
+                    
+                    # Sprawdź czy użytkownik już istnieje
+                    user = self.user_manager.get_user(username_with_suffix)
+                    if user:
+                        leader_id = user.get("id")
+                        logger.info(
+                            f"[UpdateGroupLeaders] User '{leader_login}' already exists, using existing user"
+                        )
+                    else:
+                        # Utwórz użytkownika
+                        leader_id = self.user_manager.create_user(
+                            login=leader_login,
+                            display_name=username_with_suffix,
+                            group_name=group_name,
+                        )
+                        logger.info(
+                            f"[UpdateGroupLeaders] Created user '{leader_login}' for group '{normalized_group_name}'"
+                        )
+                    
+                    # Dodaj do members (jeśli jeszcze nie jest członkiem)
+                    try:
+                        self.group_manager.add_member(group_id, leader_id)
+                    except Exception as e:
+                        # Może już być członkiem - to OK
+                        if "already" not in str(e).lower():
+                            logger.warning(
+                                f"[UpdateGroupLeaders] Could not add '{leader_login}' to members: {e}"
+                            )
+                    
+                    # Dodaj jako owner
+                    self.group_manager.add_owner(group_id, leader_id)
+                    logger.info(
+                        f"[UpdateGroupLeaders] Added '{leader_login}' as owner of group '{normalized_group_name}'"
+                    )
+                    
+                    # Przypisz RBAC role dla nowego lidera (jeśli resource_type podany)
+                    if resource_type:
+                        success, reason = self.rbac_manager.assign_role_to_group(
+                            resource_type=resource_type,
+                            group_id=group_id,
+                        )
+                        if success:
+                            logger.info(
+                                f"[UpdateGroupLeaders] Assigned RBAC role for '{resource_type}' "
+                                f"to new leader '{leader_login}'"
+                            )
+                        else:
+                            logger.warning(
+                                f"[UpdateGroupLeaders] Failed to assign RBAC role for new leader '{leader_login}': {reason}"
+                            )
+                    
+                except Exception as e:
+                    logger.error(
+                        f"[UpdateGroupLeaders] Error adding new leader '{leader_login}': {e}",
+                        exc_info=True
+                    )
+                    # Kontynuuj z następnymi liderami
+            
+            response = pb2.GroupCreatedResponse()
+            response.groupName = group_name
+            logger.info(
+                f"[UpdateGroupLeaders] Successfully synchronized leaders for group '{normalized_group_name}'. "
+                f"Added: {len(to_add)}, Removed: {len(to_remove)}"
+            )
+            return response
+            
+        except Exception as e:
+            logger.error(f"[UpdateGroupLeaders] Error: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GroupCreatedResponse()
 

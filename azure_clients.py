@@ -81,7 +81,15 @@ def get_cost_client() -> CostManagementClient:
     """
     Cost Management – zapytania o koszty subskrypcji (odpowiednik AWS Cost Explorer).
     Będzie używany w cost_monitoring/limit_manager.py.
+    
+    Wymusza HTTPS endpoint, aby uniknąć błędu "Bearer token authentication is not permitted for non-TLS".
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     credential = get_credential()
+    # Wymuszamy HTTPS endpoint - domyślnie management.azure.com używa HTTPS, ale lepiej być explicite
+    base_url = "https://management.azure.com"
+    logger.info(f"[get_cost_client] Initializing CostManagementClient with base_url: {base_url}")
     # subscription_id podajesz później jako scope w zapytaniu
-    return CostManagementClient(credential)
+    return CostManagementClient(credential=credential, base_url=base_url)

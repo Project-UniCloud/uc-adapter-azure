@@ -7,6 +7,7 @@ import logging
 
 import grpc
 
+from azure_clients import get_resource_client
 from identity.rbac_manager import AzureRBACManager
 from identity.utils import normalize_name
 from clean_resources.resource_finder import ResourceFinder
@@ -74,38 +75,101 @@ class ResourceHandlers:
         """
         Usuwa wszystkie zasoby Azure związane z grupą (VMs, storage, etc.).
         Backend expects this method (called during group cleanup).
+        
+        Strategia cleanup:
+        1. Najpierw próbuje znaleźć i usunąć zasoby po tagach Group
+        2. Jeśli nie znaleziono zasobów po tagach, używa fallback: usuwa Resource Group rg-{group_name}
+           (to usunie wszystkie zasoby w tej RG, nawet bez tagów)
         """
         group_name: str = request.groupName
         normalized_group_name = normalize_name(group_name)
 
         try:
-            # Find resources tagged with group name
-            resources = self.resource_finder.find_resources_by_tags({"Group": normalized_group_name})
-            
-            if not resources:
-                response = pb2.CleanupGroupResponse()
-                response.success = True
-                response.message = f"No resources found for group '{normalized_group_name}'"
-                logger.info(f"No resources found for group '{normalized_group_name}'")
-                return response
-            
-            # Delete resources
             deleted_resources = []
+            
+            # Krok 1: Find resources tagged with group name
+            resources = self.resource_finder.find_resources_by_tags({"Group": normalized_group_name})
+            logger.info(
+                f"[CleanupGroupResources] Found {len(resources)} resources with tag Group={normalized_group_name}"
+            )
+            
+            # Delete resources found by tags
             for resource in resources:
                 try:
                     result_msg = self.resource_deleter.delete_resource(resource)
                     deleted_resources.append(result_msg)
-                    logger.info(f"Deleted resource: {result_msg}")
+                    logger.info(f"[CleanupGroupResources] Deleted resource: {result_msg}")
                 except Exception as e:
-                    logger.error(f"Error deleting resource {resource.get('name', 'unknown')}: {e}", exc_info=True)
+                    logger.error(
+                        f"[CleanupGroupResources] Error deleting resource {resource.get('name', 'unknown')}: {e}",
+                        exc_info=True
+                    )
                     # Continue with other resources
             
-            response = pb2.CleanupGroupResponse()
-            response.success = True
-            response.deletedResources.extend(deleted_resources)
-            response.message = f"Cleanup completed for group '{normalized_group_name}'. Deleted {len(deleted_resources)} resources."
-            logger.info(f"Cleaned up {len(deleted_resources)} resources for group '{normalized_group_name}'")
-            return response
+            # Krok 2: Fallback - jeśli nie znaleziono zasobów po tagach, spróbuj usunąć Resource Group
+            if not resources:
+                resource_group_name = f"rg-{normalized_group_name}"
+                logger.info(
+                    f"[CleanupGroupResources] No resources found by tags. "
+                    f"Trying fallback: delete Resource Group '{resource_group_name}'"
+                )
+                
+                try:
+                    resource_client = get_resource_client()
+                    
+                    # Sprawdź czy RG istnieje
+                    try:
+                        rg = resource_client.resource_groups.get(resource_group_name)
+                        if rg:
+                            logger.info(
+                                f"[CleanupGroupResources] Resource Group '{resource_group_name}' exists. "
+                                f"Deleting it (this will delete all resources in the RG)..."
+                            )
+                            
+                            # Usuń Resource Group (to usunie wszystkie zasoby w niej)
+                            resource_client.resource_groups.begin_delete(resource_group_name).wait()
+                            
+                            deleted_resources.append(f"Deleted Resource Group: {resource_group_name}")
+                            logger.info(
+                                f"[CleanupGroupResources] Successfully deleted Resource Group '{resource_group_name}'"
+                            )
+                    except Exception as e:
+                        # RG nie istnieje - to OK
+                        logger.info(
+                            f"[CleanupGroupResources] Resource Group '{resource_group_name}' does not exist. "
+                            f"Nothing to clean up."
+                        )
+                        
+                except Exception as e:
+                    logger.warning(
+                        f"[CleanupGroupResources] Error during fallback Resource Group deletion: {e}",
+                        exc_info=True
+                    )
+                    # Nie traktujemy tego jako błąd krytyczny - może RG nie istnieje
+            
+            # Przygotuj response
+            if deleted_resources:
+                response = pb2.CleanupGroupResponse()
+                response.success = True
+                response.deletedResources.extend(deleted_resources)
+                response.message = (
+                    f"Cleanup completed for group '{normalized_group_name}'. "
+                    f"Deleted {len(deleted_resources)} resource(s)."
+                )
+                logger.info(
+                    f"[CleanupGroupResources] Cleanup completed for group '{normalized_group_name}'. "
+                    f"Deleted {len(deleted_resources)} resource(s)."
+                )
+                return response
+            else:
+                response = pb2.CleanupGroupResponse()
+                response.success = True
+                response.message = f"No resources found for group '{normalized_group_name}' (checked tags and Resource Group)"
+                logger.info(
+                    f"[CleanupGroupResources] No resources found for group '{normalized_group_name}' "
+                    f"(checked tags and Resource Group)"
+                )
+                return response
 
         except Exception as e:
             logger.error(f"[CleanupGroupResources] Error: {e}", exc_info=True)

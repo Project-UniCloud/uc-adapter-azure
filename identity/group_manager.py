@@ -11,11 +11,12 @@ To jest odpowiednik AWS-owego IAM GroupManager:
 
 import time
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 from msgraph.core import GraphClient
 
-from azure_clients import get_graph_client
+from azure_clients import get_graph_client, get_resource_client
+from config.settings import AZURE_SUBSCRIPTION_ID
 from identity.utils import normalize_name
 
 logger = logging.getLogger(__name__)
@@ -33,13 +34,27 @@ class AzureGroupManager:
 
     # ========= OPERACJE PODSTAWOWE =========
 
-    def create_group(self, name: str, description: Optional[str] = None) -> str:
+    def create_group(
+        self, 
+        name: str, 
+        description: Optional[str] = None,
+        create_resource_group: bool = True
+    ) -> Tuple[str, Optional[str]]:
         """
         Tworzy nową grupę bezpieczeństwa (security group) w Entra ID.
         Normalizuje nazwę grupy (spaces → dashes) dla zgodności z AWS adapterem.
+        
+        Opcjonalnie tworzy również Resource Group w Azure dla tej grupy (fallback cleanup).
+
+        Args:
+            name: Nazwa grupy
+            description: Opcjonalny opis grupy
+            create_resource_group: Czy utworzyć Resource Group dla grupy (domyślnie True)
 
         Zwraca:
-            id grupy (GUID), którego używamy dalej np. w add_member.
+            Tuple (group_id: str, resource_group_name: Optional[str]):
+            - group_id: id grupy (GUID), którego używamy dalej np. w add_member
+            - resource_group_name: nazwa utworzonej Resource Group lub None
         """
         # Normalize group name (matches AWS adapter behavior)
         normalized_name = normalize_name(name)
@@ -57,7 +72,71 @@ class AzureGroupManager:
         resp = self._graph.post("/groups", json=body)
         resp.raise_for_status()
         data = resp.json()
-        return data["id"]
+        group_id = data["id"]
+        
+        # Utwórz Resource Group dla grupy (fallback cleanup)
+        resource_group_name = None
+        if create_resource_group:
+            try:
+                resource_group_name = self._create_resource_group_for_group(normalized_name)
+                logger.info(
+                    f"[create_group] Created Resource Group '{resource_group_name}' "
+                    f"for group '{normalized_name}'"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[create_group] Failed to create Resource Group for group '{normalized_name}': {e}. "
+                    f"Continuing without RG (cleanup will rely on tags only)."
+                )
+        
+        return group_id, resource_group_name
+    
+    def _create_resource_group_for_group(self, normalized_group_name: str) -> Optional[str]:
+        """
+        Tworzy Resource Group dla grupy o nazwie rg-{normalized_group_name} z tagiem Group.
+        
+        Args:
+            normalized_group_name: Znormalizowana nazwa grupy
+        
+        Returns:
+            Nazwa utworzonej Resource Group lub None w przypadku błędu
+        """
+        try:
+            resource_client = get_resource_client()
+            resource_group_name = f"rg-{normalized_group_name}"
+            
+            # Sprawdź czy RG już istnieje
+            try:
+                existing_rg = resource_client.resource_groups.get(resource_group_name)
+                if existing_rg:
+                    logger.info(
+                        f"[_create_resource_group_for_group] Resource Group '{resource_group_name}' "
+                        f"already exists"
+                    )
+                    return resource_group_name
+            except Exception:
+                # RG nie istnieje - utworzymy nowy
+                pass
+            
+            # Utwórz nowy Resource Group z tagiem Group
+            tags = {"Group": normalized_group_name}
+            resource_client.resource_groups.create_or_update(
+                resource_group_name,
+                {"location": "westeurope", "tags": tags}  # Domyślna lokalizacja
+            )
+            
+            logger.info(
+                f"[_create_resource_group_for_group] Created Resource Group '{resource_group_name}' "
+                f"with tag Group={normalized_group_name}"
+            )
+            return resource_group_name
+            
+        except Exception as e:
+            logger.error(
+                f"[_create_resource_group_for_group] Error creating Resource Group: {e}",
+                exc_info=True
+            )
+            return None
 
     def delete_group(self, group_id: str) -> None:
         """
@@ -106,12 +185,12 @@ class AzureGroupManager:
         group_id: str,
         user_id: str,
         retries: int = 5,
-        delay: float = 3.0,
+        initial_delay: float = 3.0,
     ) -> None:
         """
-        Dodaje użytkownika do grupy z prostym mechanizmem retry na wypadek
-        opóźnionej replikacji katalogu (częste 404 Request_ResourceNotFound
-        tuż po utworzeniu grupy lub użytkownika).
+        Dodaje użytkownika do grupy z ulepszonym mechanizmem retry:
+        - Obsługuje 404 (replikacja katalogu), 429 (rate limit), 5xx (błędy serwera)
+        - Używa exponential backoff z maksymalnym delay 30s
 
         Implementacja zgodna z API Graph:
         POST /groups/{group_id}/members/$ref
@@ -119,47 +198,69 @@ class AzureGroupManager:
 
         :param group_id: GUID grupy
         :param user_id: GUID użytkownika (taki, jaki zwraca AzureUserManager.create_user)
-        :param retries: ile razy ponawiać próbę po 404
-        :param delay: opóźnienie (w sekundach) między próbami
+        :param retries: ile razy ponawiać próbę
+        :param initial_delay: początkowe opóźnienie (w sekundach) - będzie rosło wykładniczo
         """
         ref = {
             "@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{user_id}"
         }
 
         last_resp = None
+        last_status = None
 
         for attempt in range(1, retries + 1):
             resp = self._graph.post(f"/groups/{group_id}/members/$ref", json=ref)
+            status = resp.status_code
 
-            if resp.status_code in (204, 201):
+            if status in (204, 201):
                 # Dodano pomyślnie
+                if attempt > 1:
+                    logger.info(
+                        f"[add_member] Successfully added member after {attempt} attempts "
+                        f"(group_id={group_id}, user_id={user_id})"
+                    )
                 return
 
-            if resp.status_code == 404:
-                # Typowy przypadek: katalog jeszcze się nie zreplikował
+            # Retry dla: 404 (replikacja), 429 (rate limit), 5xx (błędy serwera)
+            if status in (404, 429) or (500 <= status < 600):
                 last_resp = resp
+                last_status = status
+                
+                # Exponential backoff: delay = initial_delay * (2^(attempt-1)), max 30s
+                delay = min(initial_delay * (2 ** (attempt - 1)), 30.0)
+                
+                error_type = {
+                    404: "ResourceNotFound (replication delay)",
+                    429: "Too Many Requests (rate limit)",
+                }.get(status, f"Server error ({status})")
+                
                 logger.warning(
-                    f"404 ResourceNotFound dla group_id={group_id} "
-                    f"(attempt {attempt}/{retries}) – czekam {delay}s..."
+                    f"[add_member] {error_type} dla group_id={group_id}, user_id={user_id} "
+                    f"(attempt {attempt}/{retries}) – czekam {delay:.1f}s..."
                 )
-                time.sleep(delay)
-                continue
+                
+                if attempt < retries:
+                    time.sleep(delay)
+                    continue
+            else:
+                # Inne błędy (np. 400, 403) - nie retry, od razu błąd
+                logger.error(
+                    f"[add_member] ERROR adding member: status={status}, "
+                    f"group_id={group_id}, user_id={user_id}, body={resp.text}"
+                )
+                resp.raise_for_status()
+                return
 
-            # Inne błędy traktujemy od razu jako poważne
-            logger.error(
-                f"ERROR adding member: status={resp.status_code}, body={resp.text}"
-            )
-            resp.raise_for_status()
-
-        # Po wszystkich próbach nadal 404 – logujemy szczegóły i wywalamy wyjątek
+        # Po wszystkich próbach nadal błąd – logujemy szczegóły i wywalamy wyjątek
         if last_resp is not None:
             logger.error(
-                f"FAILED po wielu próbach. Odpowiedź Graph: status={last_resp.status_code}"
+                f"[add_member] FAILED po {retries} próbach. "
+                f"Ostatni status: {last_status}, group_id={group_id}, user_id={user_id}"
             )
             try:
-                logger.error(f"  body: {last_resp.json()}")
+                logger.error(f"[add_member] Response body: {last_resp.json()}")
             except Exception:
-                logger.error(f"  raw body: {last_resp.text}")
+                logger.error(f"[add_member] Raw response body: {last_resp.text}")
             last_resp.raise_for_status()
 
     def add_owner(
@@ -167,52 +268,80 @@ class AzureGroupManager:
         group_id: str,
         user_id: str,
         retries: int = 5,
-        delay: float = 3.0,
+        initial_delay: float = 3.0,
     ) -> None:
         """
-        Dodaje właściciela (owner) do grupy, z prostym retry na 404
-        (opóźniona replikacja katalogu).
+        Dodaje właściciela (owner) do grupy z ulepszonym mechanizmem retry:
+        - Obsługuje 404 (replikacja katalogu), 429 (rate limit), 5xx (błędy serwera)
+        - Używa exponential backoff z maksymalnym delay 30s
 
         POST /groups/{group_id}/owners/$ref
         body: { "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/{user_id}" }
+        
+        :param group_id: GUID grupy
+        :param user_id: GUID użytkownika
+        :param retries: ile razy ponawiać próbę
+        :param initial_delay: początkowe opóźnienie (w sekundach) - będzie rosło wykładniczo
         """
         ref = {
             "@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{user_id}"
         }
 
         last_resp = None
+        last_status = None
 
         for attempt in range(1, retries + 1):
             resp = self._graph.post(f"/groups/{group_id}/owners/$ref", json=ref)
+            status = resp.status_code
 
-            if resp.status_code in (204, 201):
+            if status in (204, 201):
                 # Dodano pomyślnie
+                if attempt > 1:
+                    logger.info(
+                        f"[add_owner] Successfully added owner after {attempt} attempts "
+                        f"(group_id={group_id}, user_id={user_id})"
+                    )
                 return
 
-            if resp.status_code == 404:
-                # Typowy przypadek: katalog jeszcze się nie zreplikował
+            # Retry dla: 404 (replikacja), 429 (rate limit), 5xx (błędy serwera)
+            if status in (404, 429) or (500 <= status < 600):
                 last_resp = resp
+                last_status = status
+                
+                # Exponential backoff: delay = initial_delay * (2^(attempt-1)), max 30s
+                delay = min(initial_delay * (2 ** (attempt - 1)), 30.0)
+                
+                error_type = {
+                    404: "ResourceNotFound (replication delay)",
+                    429: "Too Many Requests (rate limit)",
+                }.get(status, f"Server error ({status})")
+                
                 logger.warning(
-                    f"404 ResourceNotFound (owner) dla group_id={group_id} "
-                    f"(attempt {attempt}/{retries}) – czekam {delay}s..."
+                    f"[add_owner] {error_type} dla group_id={group_id}, user_id={user_id} "
+                    f"(attempt {attempt}/{retries}) – czekam {delay:.1f}s..."
                 )
-                time.sleep(delay)
-                continue
-
-            logger.error(
-                f"ERROR adding owner: status={resp.status_code}, body={resp.text}"
-            )
-            resp.raise_for_status()
+                
+                if attempt < retries:
+                    time.sleep(delay)
+                    continue
+            else:
+                # Inne błędy (np. 400, 403) - nie retry, od razu błąd
+                logger.error(
+                    f"[add_owner] ERROR adding owner: status={status}, "
+                    f"group_id={group_id}, user_id={user_id}, body={resp.text}"
+                )
+                resp.raise_for_status()
+                return
 
         if last_resp is not None:
             logger.error(
-                f"FAILED (owner) po wielu próbach. Odpowiedź Graph: "
-                f"status={last_resp.status_code}"
+                f"[add_owner] FAILED po {retries} próbach. "
+                f"Ostatni status: {last_status}, group_id={group_id}, user_id={user_id}"
             )
             try:
-                logger.error(f"  body: {last_resp.json()}")
+                logger.error(f"[add_owner] Response body: {last_resp.json()}")
             except Exception:
-                logger.error(f"  raw body: {last_resp.text}")
+                logger.error(f"[add_owner] Raw response body: {last_resp.text}")
             last_resp.raise_for_status()
 
     def remove_member(self, group_id: str, user_id: str) -> None:
@@ -240,3 +369,52 @@ class AzureGroupManager:
         members.extend(data.get("value", []))
 
         return members
+    
+    def list_owners(self, group_id: str) -> List[str]:
+        """
+        Zwraca listę user_id właścicieli (owners) grupy.
+        
+        Args:
+            group_id: GUID grupy
+        
+        Returns:
+            Lista user_id (GUID) właścicieli grupy
+        """
+        owners: List[str] = []
+        
+        try:
+            resp = self._graph.get(f"/groups/{group_id}/owners")
+            resp.raise_for_status()
+            data = resp.json()
+            
+            for owner in data.get("value", []):
+                if owner.get("objectType") == "User":
+                    owner_id = owner.get("id")
+                    if owner_id:
+                        owners.append(owner_id)
+            
+            logger.info(f"[list_owners] Found {len(owners)} owners for group {group_id}")
+            return owners
+        except Exception as e:
+            logger.error(f"[list_owners] Error listing owners for group {group_id}: {e}", exc_info=True)
+            return []
+    
+    def remove_owner(self, group_id: str, user_id: str) -> None:
+        """
+        Usuwa właściciela (owner) z grupy.
+        
+        DELETE /groups/{group_id}/owners/{user_id}/$ref
+        
+        Args:
+            group_id: GUID grupy
+            user_id: GUID użytkownika do usunięcia z owners
+        """
+        try:
+            resp = self._graph.delete(f"/groups/{group_id}/owners/{user_id}/$ref")
+            if resp.status_code not in (204, 404):
+                # 204 – usunięto, 404 – już go tam nie było
+                resp.raise_for_status()
+            logger.info(f"[remove_owner] Removed owner {user_id} from group {group_id}")
+        except Exception as e:
+            logger.warning(f"[remove_owner] Error removing owner {user_id} from group {group_id}: {e}")
+            # Nie rzucamy wyjątku - może owner już nie istnieje

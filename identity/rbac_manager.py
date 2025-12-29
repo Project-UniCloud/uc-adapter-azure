@@ -63,12 +63,12 @@ class AzureRBACManager:
         resource_type: str,
         group_id: str,
         scope: Optional[str] = None,
-    ) -> bool:
+    ) -> tuple[bool, str]:
         """
         Przypisuje rolę RBAC do grupy na podstawie typu zasobu.
 
         Args:
-            resource_type: typ zasobu (np. "vm", "storage")
+            resource_type: typ zasobu (np. "vm", "storage", "compute")
             group_id: objectId grupy w Entra ID
             scope: scope przypisania – domyślnie cała subskrypcja
                    (np. "/subscriptions/...").
@@ -76,21 +76,32 @@ class AzureRBACManager:
                    "/subscriptions/.../resourceGroups/<RG_NAME>"
 
         Returns:
-            True – jeśli przypisanie się udało
-            False – jeśli pominięto lub nie powiodło się
+            Tuple (success: bool, reason: str):
+            - (True, "") – jeśli przypisanie się udało
+            - (False, reason) – jeśli pominięto lub nie powiodło się, z opisem powodu
         """
+        # Walidacja resource_type z lepszym komunikatem błędu
         if resource_type not in self.RESOURCE_TYPE_ROLES:
-            logging.warning(
-                f"Unknown resource type: {resource_type}, skipping RBAC assignment"
+            available_types = ", ".join(sorted(self.RESOURCE_TYPE_ROLES.keys()))
+            reason = (
+                f"Unknown resource type: '{resource_type}'. "
+                f"Available resource types: {available_types}"
             )
-            return False
+            logging.warning(f"[assign_role_to_group] {reason}")
+            return False, reason
 
         role_name = self.RESOURCE_TYPE_ROLES[resource_type]
+        logging.info(
+            f"[assign_role_to_group] Mapping resource_type '{resource_type}' "
+            f"to role '{role_name}' for group {group_id}"
+        )
+        
         role_definition_id = self._get_role_definition_id(role_name)
 
         if not role_definition_id:
-            logging.warning(f"Role definition ID not found for {role_name}")
-            return False
+            reason = f"Role definition ID not found for role name '{role_name}'. Role may not exist in subscription."
+            logging.warning(f"[assign_role_to_group] {reason}")
+            return False, reason
 
         # Domyślny scope: poziom subskrypcji
         if scope is None:
@@ -117,10 +128,10 @@ class AzureRBACManager:
                     parameters=role_assignment_params,
                 )
                 logging.info(
-                    f"Assigned role '{role_name}' to group {group_id} "
-                    f"for resource type '{resource_type}' at scope '{scope}'"
+                    f"[assign_role_to_group] Successfully assigned role '{role_name}' "
+                    f"to group {group_id} for resource type '{resource_type}' at scope '{scope}'"
                 )
-                return True
+                return True, ""
 
             except Exception as e:
                 msg = str(e)
@@ -129,19 +140,85 @@ class AzureRBACManager:
                 # PrincipalNotFound – katalog jeszcze nie „zna” objectId
                 if "PrincipalNotFound" in msg and attempt < max_attempts:
                     logging.warning(
-                        f"PrincipalNotFound for group {group_id} when assigning role "
-                        f"'{role_name}' (attempt {attempt}/{max_attempts}) – "
-                        f"waiting {delay_seconds}s..."
+                        f"[assign_role_to_group] PrincipalNotFound for group {group_id} "
+                        f"when assigning role '{role_name}' (attempt {attempt}/{max_attempts}) – "
+                        f"waiting {delay_seconds}s for replication..."
                     )
                     time.sleep(delay_seconds)
                     continue
 
-                logging.error(f"Failed to assign role: {e}")
-                return False
+                # Inne błędy - loguj szczegóły
+                reason = f"Exception during role assignment (attempt {attempt}/{max_attempts}): {msg}"
+                logging.error(f"[assign_role_to_group] {reason}")
+                
+                # Jeśli to ostatnia próba, zwróć błąd
+                if attempt >= max_attempts:
+                    return False, reason
 
         # Nie udało się nawet po retry
-        logging.error(
+        reason = (
             f"Failed to assign role '{role_name}' to group {group_id} "
-            f"for resource type '{resource_type}' after {max_attempts} attempts"
+            f"for resource type '{resource_type}' after {max_attempts} attempts. "
+            f"Last error: {msg if 'msg' in locals() else 'Unknown error'}"
         )
-        return False
+        logging.error(f"[assign_role_to_group] {reason}")
+        return False, reason
+    
+    def remove_role_assignments_for_user(
+        self,
+        user_id: str,
+        scope: Optional[str] = None,
+    ) -> int:
+        """
+        Usuwa wszystkie role assignments dla użytkownika (np. starego lidera).
+        
+        Args:
+            user_id: objectId użytkownika w Entra ID
+            scope: scope przypisania – domyślnie cała subskrypcja
+        
+        Returns:
+            Liczba usuniętych assignments
+        """
+        if scope is None:
+            scope = f"/subscriptions/{self._subscription_id}"
+        
+        removed_count = 0
+        
+        try:
+            # Listuj wszystkie role assignments na danym scope
+            assignments = self._auth_client.role_assignments.list_for_scope(scope=scope)
+            
+            for assignment in assignments:
+                # Sprawdź czy assignment jest dla tego użytkownika
+                if assignment.principal_id == user_id and assignment.principal_type == "User":
+                    try:
+                        # Usuń assignment
+                        self._auth_client.role_assignments.delete(
+                            scope=scope,
+                            role_assignment_name=assignment.name
+                        )
+                        removed_count += 1
+                        logging.info(
+                            f"[remove_role_assignments_for_user] Removed role assignment "
+                            f"'{assignment.role_definition_id}' for user {user_id} at scope {scope}"
+                        )
+                    except Exception as e:
+                        logging.warning(
+                            f"[remove_role_assignments_for_user] Failed to remove assignment "
+                            f"'{assignment.name}' for user {user_id}: {e}"
+                        )
+            
+            if removed_count > 0:
+                logging.info(
+                    f"[remove_role_assignments_for_user] Removed {removed_count} role assignment(s) "
+                    f"for user {user_id}"
+                )
+            
+            return removed_count
+            
+        except Exception as e:
+            logging.error(
+                f"[remove_role_assignments_for_user] Error removing role assignments for user {user_id}: {e}",
+                exc_info=True
+            )
+            return removed_count
