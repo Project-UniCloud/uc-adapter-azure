@@ -378,31 +378,59 @@ class AzureGroupManager:
         """
         Zwraca listę tylko użytkowników (User) w grupie, pomijając inne typy obiektów.
         
-        Używa /groups/{group_id}/members/microsoft.graph.user aby uzyskać tylko użytkowników.
+        Używa /groups/{group_id}/members z filtrowaniem lub fallback do /members/microsoft.graph.user.
         """
         user_members: List[Dict] = []
         
         try:
+            # Próba 1: Pobierz wszystkich członków i filtruj (najbardziej niezawodne)
             params = {
-                "$select": "id,userPrincipalName"
+                "$select": "id,userPrincipalName,@odata.type"
             }
-            resp = self._graph.get(f"/groups/{group_id}/members/microsoft.graph.user", params=params)
+            resp = self._graph.get(f"/groups/{group_id}/members", params=params)
             resp.raise_for_status()
             data = resp.json()
-            user_members.extend(data.get("value", []))
+            all_members = data.get("value", [])
+            
+            logger.debug(f"[list_user_members] Retrieved {len(all_members)} total members from group {group_id}")
+            
+            # Filtruj tylko użytkowników
+            for member in all_members:
+                odata_type = member.get("@odata.type", "")
+                # Graph API zwraca "#microsoft.graph.user" dla użytkowników
+                if "#microsoft.graph.user" in odata_type:
+                    # Upewnij się, że mamy id i userPrincipalName
+                    user_id = member.get("id")
+                    upn = member.get("userPrincipalName", "")
+                    if user_id:
+                        user_members.append({
+                            "id": user_id,
+                            "userPrincipalName": upn
+                        })
+            
+            logger.info(f"[list_user_members] Found {len(user_members)} user members in group {group_id}")
+            
         except Exception as e:
             logger.warning(
-                f"[list_user_members] Error getting user members directly: {e}. "
-                f"Falling back to filtering all members."
+                f"[list_user_members] Error getting user members: {e}. "
+                f"Trying alternative endpoint...",
+                exc_info=True
             )
-            # Fallback: pobierz wszystkich członków i filtruj
-            all_members = self.list_members(group_id)
-            for member in all_members:
-                # Sprawdź @odata.type lub objectType
-                odata_type = member.get("@odata.type", "")
-                object_type = member.get("objectType", "")
-                if "#microsoft.graph.user" in odata_type or object_type == "User":
-                    user_members.append(member)
+            # Fallback: spróbuj bezpośredniego endpointu (może nie działać w niektórych wersjach Graph API)
+            try:
+                params = {
+                    "$select": "id,userPrincipalName"
+                }
+                resp = self._graph.get(f"/groups/{group_id}/members/microsoft.graph.user", params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                user_members.extend(data.get("value", []))
+                logger.info(f"[list_user_members] Fallback endpoint found {len(user_members)} users")
+            except Exception as e2:
+                logger.error(
+                    f"[list_user_members] Both methods failed. Last error: {e2}",
+                    exc_info=True
+                )
         
         return user_members
     
