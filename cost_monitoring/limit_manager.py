@@ -25,7 +25,7 @@ from msgraph.core import GraphClient
 from azure.mgmt.costmanagement import CostManagementClient
 from azure.mgmt.costmanagement.models import QueryDefinition, QueryTimePeriod, QueryDataset, QueryAggregation, QueryGrouping
 
-from azure_clients import get_graph_client, get_compute_client, get_credential
+from azure_clients import get_graph_client, get_compute_client, get_credential, _validate_scope
 from config.settings import AZURE_SUBSCRIPTION_ID
 from identity.utils import normalize_name
 
@@ -315,9 +315,12 @@ def get_total_cost_for_group(group_tag_value: str, start_date: str, end_date: st
         
         # Execute query
         scope = f"/subscriptions/{AZURE_SUBSCRIPTION_ID}"
-        # Walidacja scope - musi zaczynać się od /subscriptions/ (prawidłowy format)
-        if not scope.startswith("/subscriptions/"):
-            logger.error(f"[get_total_cost_for_group] Invalid scope format: {scope}. Must start with '/subscriptions/'")
+        # Walidacja scope - musi zaczynać się od /subscriptions/ i nie zawierać http://
+        try:
+            from azure_clients import _validate_scope
+            _validate_scope(scope)
+        except ValueError as e:
+            logger.error(f"[get_total_cost_for_group] Invalid scope: {e}")
             return 0.0
         logger.info(f"[get_total_cost_for_group] Querying Cost Management API at scope: {scope}")
         result = client.query.usage(scope=scope, parameters=query)
@@ -385,8 +388,10 @@ def get_group_cost_with_service_breakdown(group_tag_value: str, start_date: str,
         
         scope = f"/subscriptions/{AZURE_SUBSCRIPTION_ID}"
         # Walidacja scope
-        if not scope.startswith("/subscriptions/"):
-            logger.error(f"[get_group_cost_with_service_breakdown] Invalid scope format: {scope}")
+        try:
+            _validate_scope(scope)
+        except ValueError as e:
+            logger.error(f"[get_group_cost_with_service_breakdown] Invalid scope: {e}")
             return {'total': 0.0, 'by_service': {}}
         logger.info(f"[get_group_cost_with_service_breakdown] Querying Cost Management API at scope: {scope}")
         result = client.query.usage(scope=scope, parameters=query)
@@ -463,8 +468,10 @@ def get_total_costs_for_all_groups(start_date: str, end_date: str = None) -> Dic
         
         scope = f"/subscriptions/{AZURE_SUBSCRIPTION_ID}"
         # Walidacja scope
-        if not scope.startswith("/subscriptions/"):
-            logger.error(f"[get_total_costs_for_all_groups] Invalid scope format: {scope}")
+        try:
+            _validate_scope(scope)
+        except ValueError as e:
+            logger.error(f"[get_total_costs_for_all_groups] Invalid scope: {e}")
             return {}
         logger.info(f"[get_total_costs_for_all_groups] Querying Cost Management API at scope: {scope}")
         result = client.query.usage(scope=scope, parameters=query)
@@ -529,8 +536,10 @@ def get_total_azure_cost(start_date: str, end_date: str = None) -> float:
         
         scope = f"/subscriptions/{AZURE_SUBSCRIPTION_ID}"
         # Walidacja scope
-        if not scope.startswith("/subscriptions/"):
-            logger.error(f"[get_total_azure_cost] Invalid scope format: {scope}")
+        try:
+            _validate_scope(scope)
+        except ValueError as e:
+            logger.error(f"[get_total_azure_cost] Invalid scope: {e}")
             return 0.0
         logger.info(f"[get_total_azure_cost] Querying Cost Management API at scope: {scope}")
         result = client.query.usage(scope=scope, parameters=query)
@@ -588,8 +597,10 @@ def get_total_cost_with_service_breakdown(start_date: str, end_date: str = None)
         
         scope = f"/subscriptions/{AZURE_SUBSCRIPTION_ID}"
         # Walidacja scope
-        if not scope.startswith("/subscriptions/"):
-            logger.error(f"[get_total_cost_with_service_breakdown] Invalid scope format: {scope}")
+        try:
+            _validate_scope(scope)
+        except ValueError as e:
+            logger.error(f"[get_total_cost_with_service_breakdown] Invalid scope: {e}")
             return {'total': 0.0, 'by_service': {}}
         logger.info(f"[get_total_cost_with_service_breakdown] Querying Cost Management API at scope: {scope}")
         result = client.query.usage(scope=scope, parameters=query)
@@ -676,8 +687,10 @@ def get_group_cost_last_6_months_by_service(group_tag_value: str) -> Dict[str, f
         
         scope = f"/subscriptions/{AZURE_SUBSCRIPTION_ID}"
         # Walidacja scope
-        if not scope.startswith("/subscriptions/"):
-            logger.error(f"[get_group_cost_last_6_months_by_service] Invalid scope format: {scope}")
+        try:
+            _validate_scope(scope)
+        except ValueError as e:
+            logger.error(f"[get_group_cost_last_6_months_by_service] Invalid scope: {e}")
             return {}
         logger.info(f"[get_group_cost_last_6_months_by_service] Querying Cost Management API at scope: {scope}")
         result = client.query.usage(scope=scope, parameters=query)
@@ -755,8 +768,10 @@ def get_group_monthly_costs_last_6_months(group_tag_value: str) -> Dict[str, flo
         
         scope = f"/subscriptions/{AZURE_SUBSCRIPTION_ID}"
         # Walidacja scope
-        if not scope.startswith("/subscriptions/"):
-            logger.error(f"[get_group_monthly_costs_last_6_months] Invalid scope format: {scope}")
+        try:
+            _validate_scope(scope)
+        except ValueError as e:
+            logger.error(f"[get_group_monthly_costs_last_6_months] Invalid scope: {e}")
             return month_costs
         logger.info(f"[get_group_monthly_costs_last_6_months] Querying Cost Management API at scope: {scope}")
         result = client.query.usage(scope=scope, parameters=query)

@@ -363,12 +363,48 @@ class AzureGroupManager:
         """
         members: List[Dict] = []
 
-        resp = self._graph.get(f"/groups/{group_id}/members")
+        # Użyj $select aby uzyskać potrzebne pola (id, userPrincipalName, @odata.type)
+        params = {
+            "$select": "id,userPrincipalName,@odata.type"
+        }
+        resp = self._graph.get(f"/groups/{group_id}/members", params=params)
         resp.raise_for_status()
         data = resp.json()
         members.extend(data.get("value", []))
 
         return members
+    
+    def list_user_members(self, group_id: str) -> List[Dict]:
+        """
+        Zwraca listę tylko użytkowników (User) w grupie, pomijając inne typy obiektów.
+        
+        Używa /groups/{group_id}/members/microsoft.graph.user aby uzyskać tylko użytkowników.
+        """
+        user_members: List[Dict] = []
+        
+        try:
+            params = {
+                "$select": "id,userPrincipalName"
+            }
+            resp = self._graph.get(f"/groups/{group_id}/members/microsoft.graph.user", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            user_members.extend(data.get("value", []))
+        except Exception as e:
+            logger.warning(
+                f"[list_user_members] Error getting user members directly: {e}. "
+                f"Falling back to filtering all members."
+            )
+            # Fallback: pobierz wszystkich członków i filtruj
+            all_members = self.list_members(group_id)
+            for member in all_members:
+                # Sprawdź @odata.type lub objectType
+                odata_type = member.get("@odata.type", "")
+                object_type = member.get("objectType", "")
+                if "#microsoft.graph.user" in odata_type or object_type == "User":
+                    user_members.append(member)
+        
+        return user_members
     
     def list_owners(self, group_id: str) -> List[str]:
         """

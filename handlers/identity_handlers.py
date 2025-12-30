@@ -492,6 +492,22 @@ class IdentityHandlers:
             group_id = group["id"]
             removed_users = []
             
+            # KROK 0: Usuń role assignments dla grupy (PRZED wszystkim)
+            logger.info(
+                f"[RemoveGroup] Step 0: Removing RBAC role assignments for group '{normalized_group_name}'..."
+            )
+            try:
+                removed_group_assignments = self.rbac_manager.remove_role_assignments_for_group(group_id)
+                logger.info(
+                    f"[RemoveGroup] Removed {removed_group_assignments} role assignment(s) for group '{normalized_group_name}'"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[RemoveGroup] Error removing role assignments for group: {e}. "
+                    f"Continuing with resource cleanup...",
+                    exc_info=True
+                )
+            
             # KROK 1: Cleanup zasobów Azure PRZED usunięciem grupy Entra
             logger.info(
                 f"[RemoveGroup] Step 1: Cleaning up Azure resources for group '{normalized_group_name}'..."
@@ -557,30 +573,211 @@ class IdentityHandlers:
                 )
                 # Nie przerywamy - kontynuujemy z usuwaniem użytkowników i grupy
             
-            # KROK 2: Get all members and delete them
+            # KROK 2: Usuń role assignments dla każdego użytkownika (PRZED usunięciem użytkownika)
             logger.info(
-                f"[RemoveGroup] Step 2: Removing users from group '{normalized_group_name}'..."
+                f"[RemoveGroup] Step 2: Removing RBAC role assignments for users in group '{normalized_group_name}'..."
             )
-            members = self.group_manager.list_members(group_id)
-            for member in members:
-                if member.get("objectType") == "User":
-                    user_principal_name = member.get("userPrincipalName", "")
-                    if user_principal_name:
-                        try:
-                            # Remove from group first
-                            self.group_manager.remove_member(group_id, member.get("id"))
-                            # Delete user
-                            self.user_manager.delete_user(user_principal_name)
-                            removed_users.append(user_principal_name)
-                            logger.info(
-                                f"[RemoveGroup] Removed user '{user_principal_name}' from group and Azure AD"
-                            )
-                        except Exception as e:
-                            logger.warning(f"[RemoveGroup] Failed to delete user {user_principal_name}: {e}")
             
-            # KROK 3: Delete the group (na końcu, po zasobach i użytkownikach)
+            # Próba 1: Pobierz użytkowników przez list_user_members (z retry dla replikacji)
+            # Używamy list_user_members zamiast list_members aby uzyskać tylko użytkowników
+            user_members = []
+            import time
+            for attempt in range(1, 4):  # 3 próby z opóźnieniem
+                try:
+                    user_members = self.group_manager.list_user_members(group_id)
+                    if user_members:
+                        break
+                    if attempt < 3:
+                        delay = 2.0 * attempt  # 2s, 4s
+                        logger.info(
+                            f"[RemoveGroup] list_user_members returned 0 users (attempt {attempt}/3). "
+                            f"Waiting {delay}s for Azure AD replication..."
+                        )
+                        time.sleep(delay)
+                except Exception as e:
+                    logger.warning(
+                        f"[RemoveGroup] Error calling list_user_members (attempt {attempt}/3): {e}"
+                    )
+                    if attempt < 3:
+                        time.sleep(2.0 * attempt)
+            
             logger.info(
-                f"[RemoveGroup] Step 3: Deleting Entra ID group '{normalized_group_name}'..."
+                f"[RemoveGroup] Found {len(user_members)} user members in group '{normalized_group_name}' (group_id: {group_id})"
+            )
+            
+            # Debug: loguj szczegóły użytkowników
+            for idx, user in enumerate(user_members):
+                logger.info(
+                    f"[RemoveGroup] User {idx+1}: id={user.get('id')}, "
+                    f"userPrincipalName={user.get('userPrincipalName', 'N/A')}"
+                )
+            
+            user_ids_to_remove = []
+            
+            # Jeśli list_user_members nie zwróciło użytkowników, spróbuj znaleźć użytkowników po UPN (fallback)
+            # To rozwiązanie jest inspirowane AWS adapterem, który taguje użytkowników przy tworzeniu.
+            # Azure AD nie ma tagów, więc używamy UPN pattern: {user}-{group}@{domain}
+            if not user_members:
+                logger.warning(
+                    f"[RemoveGroup] list_members returned 0 members (Azure AD replication delay). "
+                    f"Trying fallback: search users by UPN pattern containing '{normalized_group_name}'..."
+                )
+                # Fallback: znajdź użytkowników po UPN zawierającym nazwę grupy
+                # Format UPN: {user}-{normalized_group}@{domain}
+                try:
+                    from config.settings import AZURE_UDOMAIN
+                    from azure_clients import get_graph_client
+                    graph_client = get_graph_client()
+                    
+                    # Graph API filter: szukamy użytkowników gdzie UPN kończy się na "-{group}@{domain}"
+                    # Używamy endswith zamiast contains dla lepszej wydajności
+                    filter_pattern = f"-{normalized_group_name}@{AZURE_UDOMAIN}"
+                    # Graph API wymaga URL encoding dla filtrów
+                    import urllib.parse
+                    filter_encoded = urllib.parse.quote(f"endswith(userPrincipalName,'{filter_pattern}')")
+                    
+                    resp = graph_client.get(f"/users?$filter={filter_encoded}&$select=id,userPrincipalName")
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        fallback_users = data.get("value", [])
+                        logger.info(
+                            f"[RemoveGroup] Fallback search found {len(fallback_users)} users with UPN pattern '{filter_pattern}'"
+                        )
+                        for user in fallback_users:
+                            upn = user.get("userPrincipalName", "")
+                            user_id = user.get("id")
+                            if user_id and upn and normalized_group_name in upn:
+                                user_members.append({
+                                    "id": user_id,
+                                    "userPrincipalName": upn
+                                })
+                                logger.info(
+                                    f"[RemoveGroup] Fallback: Found user '{upn}' (id: {user_id})"
+                                )
+                    else:
+                        logger.warning(
+                            f"[RemoveGroup] Fallback user search failed: status={resp.status_code}, "
+                            f"response: {resp.text[:200]}"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[RemoveGroup] Fallback user search error: {e}",
+                        exc_info=True
+                    )
+            
+            # Przetwórz wszystkich znalezionych użytkowników
+            for user in user_members:
+                user_id = user.get("id")
+                user_principal_name = user.get("userPrincipalName", "")
+                
+                if not user_id:
+                    logger.warning(
+                        f"[RemoveGroup] User member missing 'id': {user}"
+                    )
+                    continue
+                
+                if not user_principal_name:
+                    logger.warning(
+                        f"[RemoveGroup] User member missing 'userPrincipalName' (id: {user_id}). "
+                        f"Trying to get UPN from Graph API..."
+                    )
+                    # Spróbuj pobrać UPN z Graph API
+                    try:
+                        from azure_clients import get_graph_client
+                        graph_client = get_graph_client()
+                        user_data = graph_client.get(f"/users/{user_id}?$select=userPrincipalName")
+                        if user_data.status_code == 200:
+                            user_principal_name = user_data.json().get("userPrincipalName", "")
+                            logger.info(
+                                f"[RemoveGroup] Retrieved UPN for user {user_id}: {user_principal_name}"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"[RemoveGroup] Failed to get UPN for user {user_id}: {e}"
+                        )
+                
+                if user_id and user_principal_name:
+                    try:
+                        removed_user_assignments = self.rbac_manager.remove_role_assignments_for_user(user_id)
+                        logger.info(
+                            f"[RemoveGroup] Removed {removed_user_assignments} role assignment(s) "
+                            f"for user '{user_principal_name}' (id: {user_id})"
+                        )
+                        user_ids_to_remove.append((user_id, user_principal_name))
+                    except Exception as e:
+                        logger.warning(
+                            f"[RemoveGroup] Error removing role assignments for user {user_principal_name}: {e}. "
+                            f"Continuing with user deletion...",
+                            exc_info=True
+                        )
+                        # Dodaj użytkownika do listy do usunięcia mimo błędu
+                        user_ids_to_remove.append((user_id, user_principal_name))
+                else:
+                    logger.warning(
+                        f"[RemoveGroup] Skipping user member: missing id or userPrincipalName. "
+                        f"id={user_id}, userPrincipalName={user_principal_name}"
+                    )
+            
+            # KROK 3: Usuń użytkowników z grupy i usuń użytkowników
+            logger.info(
+                f"[RemoveGroup] Step 3: Removing users from group and deleting users for group '{normalized_group_name}'..."
+            )
+            for user_id, user_principal_name in user_ids_to_remove:
+                try:
+                    # Remove from group first (idempotent - 404 is OK)
+                    try:
+                        self.group_manager.remove_member(group_id, user_id)
+                    except Exception as e:
+                        # Ignore errors when removing from group (user might already be removed)
+                        logger.debug(
+                            f"[RemoveGroup] Error removing user {user_principal_name} from group (may already be removed): {e}"
+                        )
+                    
+                    # Delete user with retry (Azure AD replication)
+                    import time
+                    user_deleted = False
+                    for delete_attempt in range(1, 4):  # 3 próby
+                        try:
+                            self.user_manager.delete_user(user_principal_name)
+                            user_deleted = True
+                            break
+                        except Exception as e:
+                            error_msg = str(e).lower()
+                            # 404 means user already deleted - success
+                            if "404" in error_msg or "not found" in error_msg:
+                                user_deleted = True
+                                logger.info(
+                                    f"[RemoveGroup] User '{user_principal_name}' already deleted (idempotent success)"
+                                )
+                                break
+                            if delete_attempt < 3:
+                                delay = 2.0 * delete_attempt  # 2s, 4s
+                                logger.warning(
+                                    f"[RemoveGroup] Error deleting user {user_principal_name} (attempt {delete_attempt}/3): {e}. "
+                                    f"Retrying in {delay}s..."
+                                )
+                                time.sleep(delay)
+                            else:
+                                raise
+                    
+                    if user_deleted:
+                        removed_users.append(user_principal_name)
+                        logger.info(
+                            f"[RemoveGroup] Removed user '{user_principal_name}' from group and Azure AD"
+                        )
+                    else:
+                        logger.error(
+                            f"[RemoveGroup] Failed to delete user {user_principal_name} after 3 attempts"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[RemoveGroup] Failed to delete user {user_principal_name}: {e}",
+                        exc_info=True
+                    )
+            
+            # KROK 4: Delete the group (na końcu, po zasobach, role assignments i użytkownikach)
+            logger.info(
+                f"[RemoveGroup] Step 4: Deleting Entra ID group '{normalized_group_name}'..."
             )
             self.group_manager.delete_group(group_id)
             
@@ -641,11 +838,46 @@ class IdentityHandlers:
                 context.set_details(error_msg)
                 return pb2.AssignPoliciesResponse(success=False, message=error_msg)
             
+            # Deduplikacja: compute i vm to aliasy - użyj tylko compute
+            # Usuń "vm" jeśli "compute" jest w liście
+            deduplicated_types = []
+            has_compute = "compute" in resource_types
+            has_vm = "vm" in resource_types
+            
+            for rt in resource_types:
+                if rt == "vm" and has_compute:
+                    logger.info(
+                        f"[AssignPolicies] Deduplicating: 'vm' removed (using 'compute' instead)"
+                    )
+                    continue
+                if rt not in deduplicated_types:
+                    deduplicated_types.append(rt)
+            
+            # Deterministyczna kolejność: network → storage → compute
+            # Użyj kolejności z RESOURCE_TYPE_ORDER jeśli zdefiniowana, w przeciwnym razie użyj domyślnej
+            ordered_types = []
+            resource_type_order = getattr(self.rbac_manager, 'RESOURCE_TYPE_ORDER', ['network', 'storage', 'compute', 'vm'])
+            
+            # Najpierw typy w określonej kolejności
+            for rt in resource_type_order:
+                if rt in deduplicated_types:
+                    ordered_types.append(rt)
+            
+            # Potem pozostałe typy w oryginalnej kolejności
+            for rt in deduplicated_types:
+                if rt not in ordered_types:
+                    ordered_types.append(rt)
+            
+            logger.info(
+                f"[AssignPolicies] Processing resource types in deterministic order: {ordered_types} "
+                f"(original: {resource_types}, deduplicated: {deduplicated_types})"
+            )
+            
             # Assign RBAC roles for each resource type
             assigned_roles = []
             failed_assignments = []
             
-            for resource_type in resource_types:
+            for resource_type in ordered_types:
                 try:
                     if group_name:
                         normalized_group_name = normalize_name(group_name)
@@ -656,6 +888,13 @@ class IdentityHandlers:
                             failed_assignments.append(f"{resource_type}: {error_msg}")
                             continue
                         
+                        # Pełny kontekst dla logowania
+                        scope = f"/subscriptions/{self.rbac_manager._subscription_id}"
+                        logger.info(
+                            f"[AssignPolicies] Assigning role for resource_type='{resource_type}' "
+                            f"to group='{group_name}' (group_id={group['id']}, scope={scope})"
+                        )
+                        
                         success, reason = self.rbac_manager.assign_role_to_group(
                             resource_type=resource_type,
                             group_id=group["id"]
@@ -664,10 +903,15 @@ class IdentityHandlers:
                             assigned_roles.append(f"{resource_type}->{group_name}")
                             logger.info(
                                 f"[AssignPolicies] Successfully assigned RBAC role for "
-                                f"'{resource_type}' to group '{group_name}'"
+                                f"resource_type='{resource_type}' to group='{group_name}'. "
+                                f"group_id={group['id']}, scope={scope}"
                             )
                         else:
-                            error_msg = f"Failed to assign RBAC role for '{resource_type}' to group '{group_name}': {reason}"
+                            error_msg = (
+                                f"Failed to assign RBAC role for resource_type='{resource_type}' "
+                                f"to group='{group_name}': {reason}. "
+                                f"group_id={group['id']}, scope={scope}"
+                            )
                             logger.warning(f"[AssignPolicies] {error_msg}")
                             failed_assignments.append(f"{resource_type}: {reason}")
                     

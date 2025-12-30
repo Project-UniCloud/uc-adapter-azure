@@ -2,6 +2,7 @@ version: '3.8'
 
 services:
   azure-adapter:
+    container_name: uc-adapter-azure
     build: .
     ports:
       - "50053:50053"
