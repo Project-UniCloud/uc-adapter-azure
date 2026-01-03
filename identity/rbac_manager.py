@@ -24,18 +24,16 @@ class AzureRBACManager:
     """
 
     # Mapowanie typu zasobu na nazwę wbudowanej roli RBAC
-    # UWAGA: "compute" i "vm" mapują na tę samą rolę - używaj "compute" dla spójności
     RESOURCE_TYPE_ROLES = {
         "vm": "Virtual Machine Contributor",
         "storage": "Storage Account Contributor",
         "network": "Network Contributor",
-        "compute": "Virtual Machine Contributor",  # compute i vm to aliasy - preferuj compute
         # W razie potrzeby można dodać kolejne typy
     }
     
     # Deterministyczna kolejność przypisywania ról (dla compose policy)
-    # Kolejność: network → storage → compute (zależności i stabilność)
-    RESOURCE_TYPE_ORDER = ["network", "storage", "compute", "vm"]
+    # Kolejność: network → storage → vm (zależności i stabilność)
+    RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]
 
     def __init__(self, credential=None, subscription_id: Optional[str] = None) -> None:
         cred = credential or get_credential()
@@ -151,7 +149,7 @@ class AzureRBACManager:
         Przypisuje rolę RBAC do grupy na podstawie typu zasobu.
 
         Args:
-            resource_type: typ zasobu (np. "vm", "storage", "compute")
+            resource_type: typ zasobu (np. "vm", "storage", "network")
             group_id: objectId grupy w Entra ID
             scope: scope przypisania – domyślnie cała subskrypcja
                    (np. "/subscriptions/...").

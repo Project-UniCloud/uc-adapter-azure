@@ -120,7 +120,7 @@ class TestRBACIdempotency:
         
         # Pierwsze wywołanie - powinno utworzyć assignment
         success1, reason1 = manager.assign_role_to_group(
-            resource_type="compute",
+            resource_type="vm",
             group_id="group-123"
         )
         assert success1 is True
@@ -149,7 +149,7 @@ class TestRBACIdempotency:
         
         manager = AzureRBACManager()
         success, reason = manager.assign_role_to_group(
-            resource_type="compute",
+            resource_type="vm",
             group_id="group-123"
         )
         

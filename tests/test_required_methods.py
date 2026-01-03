@@ -68,7 +68,7 @@ def test_1_get_available_services():
         print(f"  Count: {len(services_list)}")
         
         # Validate expected services (based on RBAC roles)
-        expected_services = ['vm', 'storage', 'network', 'compute']
+        expected_services = ['vm', 'storage', 'network']
         for expected in expected_services:
             if expected in services_list:
                 print(f"  [OK] Found expected service: {expected}")

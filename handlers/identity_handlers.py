@@ -868,25 +868,16 @@ class IdentityHandlers:
                 context.set_details(error_msg)
                 return pb2.AssignPoliciesResponse(success=False, message=error_msg)
             
-            # Deduplikacja: compute i vm to aliasy - użyj tylko compute
-            # Usuń "vm" jeśli "compute" jest w liście
+            # Usuń duplikaty zachowując kolejność (prosta deduplikacja)
             deduplicated_types = []
-            has_compute = "compute" in resource_types
-            has_vm = "vm" in resource_types
-            
             for rt in resource_types:
-                if rt == "vm" and has_compute:
-                    logger.info(
-                        f"[AssignPolicies] Deduplicating: 'vm' removed (using 'compute' instead)"
-                    )
-                    continue
                 if rt not in deduplicated_types:
                     deduplicated_types.append(rt)
             
-            # Deterministyczna kolejność: network → storage → compute
+            # Deterministyczna kolejność: network → storage → vm
             # Użyj kolejności z RESOURCE_TYPE_ORDER jeśli zdefiniowana, w przeciwnym razie użyj domyślnej
             ordered_types = []
-            resource_type_order = getattr(self.rbac_manager, 'RESOURCE_TYPE_ORDER', ['network', 'storage', 'compute', 'vm'])
+            resource_type_order = getattr(self.rbac_manager, 'RESOURCE_TYPE_ORDER', ['network', 'storage', 'vm'])
             
             # Najpierw typy w określonej kolejności
             for rt in resource_type_order:

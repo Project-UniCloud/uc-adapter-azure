@@ -47,11 +47,11 @@ def test_assign_policies_compute_idempotency():
         print(f"  [WARN] Group creation: {e}")
         # Może już istnieje - kontynuuj
     
-    # Test 1: Pierwsze przypisanie compute
-    print(f"\n  Test 1a: Assigning 'compute' policy (first time)...")
+    # Test 1: Pierwsze przypisanie vm
+    print(f"\n  Test 1a: Assigning 'vm' policy (first time)...")
     try:
         assign_req = pb2.AssignPoliciesRequest(
-            resourceTypes=["compute"],
+            resourceTypes=["vm"],
             groupName=test_group,
         )
         resp1 = stub.AssignPolicies(assign_req)
@@ -105,12 +105,12 @@ def test_assign_policies_multi_types():
     except Exception as e:
         print(f"  [WARN] Group creation: {e}")
     
-    # Test: Przypisz wszystkie typy (z deduplikacją compute/vm)
-    print(f"\n  Assigning policies: ['compute', 'vm', 'network', 'storage']")
-    print(f"  Expected: deduplicated to ['network', 'storage', 'compute'] in deterministic order")
+    # Test: Przypisz wszystkie typy
+    print(f"\n  Assigning policies: ['vm', 'network', 'storage']")
+    print(f"  Expected: ['network', 'storage', 'vm'] in deterministic order")
     try:
         assign_req = pb2.AssignPoliciesRequest(
-            resourceTypes=["compute", "vm", "network", "storage"],  # vm powinno być zdeduplikowane
+            resourceTypes=["vm", "network", "storage"],
             groupName=test_group,
         )
         resp = stub.AssignPolicies(assign_req)
