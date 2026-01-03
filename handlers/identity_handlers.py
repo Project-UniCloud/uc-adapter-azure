@@ -581,28 +581,36 @@ class IdentityHandlers:
             # Próba 1: Pobierz użytkowników przez list_user_members (z retry dla replikacji)
             # Używamy list_user_members zamiast list_members aby uzyskać tylko użytkowników
             user_members = []
+            primary_endpoint_count = 0
             import time
             for attempt in range(1, 4):  # 3 próby z opóźnieniem
                 try:
                     user_members = self.group_manager.list_user_members(group_id)
+                    primary_endpoint_count = len(user_members)
                     if user_members:
+                        logger.info(
+                            f"[RemoveGroup] Primary endpoint (list_user_members) found {primary_endpoint_count} users "
+                            f"in group '{normalized_group_name}' (attempt {attempt}/3)"
+                        )
                         break
                     if attempt < 3:
                         delay = 2.0 * attempt  # 2s, 4s
                         logger.info(
-                            f"[RemoveGroup] list_user_members returned 0 users (attempt {attempt}/3). "
+                            f"[RemoveGroup] Primary endpoint returned 0 users (attempt {attempt}/3). "
                             f"Waiting {delay}s for Azure AD replication..."
                         )
                         time.sleep(delay)
                 except Exception as e:
                     logger.warning(
-                        f"[RemoveGroup] Error calling list_user_members (attempt {attempt}/3): {e}"
+                        f"[RemoveGroup] Error calling list_user_members (attempt {attempt}/3): {e}",
+                        exc_info=True
                     )
                     if attempt < 3:
                         time.sleep(2.0 * attempt)
             
             logger.info(
-                f"[RemoveGroup] Found {len(user_members)} user members in group '{normalized_group_name}' (group_id: {group_id})"
+                f"[RemoveGroup] Step 2.1: Primary endpoint found {len(user_members)} user members "
+                f"in group '{normalized_group_name}' (group_id: {group_id})"
             )
             
             # Debug: loguj szczegóły użytkowników
@@ -617,9 +625,10 @@ class IdentityHandlers:
             # Jeśli list_user_members nie zwróciło użytkowników, spróbuj znaleźć użytkowników po UPN (fallback)
             # To rozwiązanie jest inspirowane AWS adapterem, który taguje użytkowników przy tworzeniu.
             # Azure AD nie ma tagów, więc używamy UPN pattern: {user}-{group}@{domain}
+            upn_search_count = 0
             if not user_members:
                 logger.warning(
-                    f"[RemoveGroup] list_members returned 0 members (Azure AD replication delay). "
+                    f"[RemoveGroup] Step 2.2: Primary endpoint returned 0 members (Azure AD replication delay). "
                     f"Trying fallback: search users by UPN pattern containing '{normalized_group_name}'..."
                 )
                 # Fallback: znajdź użytkowników po UPN zawierającym nazwę grupy
@@ -641,7 +650,8 @@ class IdentityHandlers:
                         data = resp.json()
                         fallback_users = data.get("value", [])
                         logger.info(
-                            f"[RemoveGroup] Fallback search found {len(fallback_users)} users with UPN pattern '{filter_pattern}'"
+                            f"[RemoveGroup] Step 2.2: UPN pattern search found {len(fallback_users)} users "
+                            f"with pattern '{filter_pattern}'"
                         )
                         for user in fallback_users:
                             upn = user.get("userPrincipalName", "")
@@ -651,19 +661,39 @@ class IdentityHandlers:
                                     "id": user_id,
                                     "userPrincipalName": upn
                                 })
-                                logger.info(
-                                    f"[RemoveGroup] Fallback: Found user '{upn}' (id: {user_id})"
+                                upn_search_count += 1
+                                logger.debug(
+                                    f"[RemoveGroup] UPN search: Found user '{upn}' (id: {user_id})"
                                 )
+                        logger.info(
+                            f"[RemoveGroup] Step 2.2: UPN pattern search added {upn_search_count} users "
+                            f"to removal list"
+                        )
                     else:
                         logger.warning(
-                            f"[RemoveGroup] Fallback user search failed: status={resp.status_code}, "
+                            f"[RemoveGroup] Step 2.2: UPN pattern search failed: status={resp.status_code}, "
                             f"response: {resp.text[:200]}"
                         )
                 except Exception as e:
                     logger.warning(
-                        f"[RemoveGroup] Fallback user search error: {e}",
+                        f"[RemoveGroup] Step 2.2: UPN pattern search error: {e}",
                         exc_info=True
                     )
+            
+            # Podsumowanie: loguj źródła użytkowników
+            total_users_found = len(user_members)
+            logger.info(
+                f"[RemoveGroup] Step 2 summary: Found {total_users_found} users to remove "
+                f"(primary endpoint: {primary_endpoint_count}, UPN search: {upn_search_count})"
+            )
+            
+            # Warning jeśli primary endpoint zwrócił 0, ale UPN search znalazł użytkowników
+            if primary_endpoint_count == 0 and upn_search_count > 0:
+                logger.warning(
+                    f"[RemoveGroup] WARNING: Primary endpoint (list_user_members) returned 0 users, "
+                    f"but UPN pattern search found {upn_search_count} users. "
+                    f"This may indicate an issue with Graph API /members endpoint or Azure AD replication delays."
+                )
             
             # Przetwórz wszystkich znalezionych użytkowników
             for user in user_members:

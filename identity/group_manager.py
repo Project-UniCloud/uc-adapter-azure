@@ -363,9 +363,10 @@ class AzureGroupManager:
         """
         members: List[Dict] = []
 
-        # Użyj $select aby uzyskać potrzebne pola (id, userPrincipalName, @odata.type)
+        # Użyj $select aby uzyskać potrzebne pola (id, userPrincipalName)
+        # Uwaga: @odata.type jest automatycznie zwracane przez Graph API, nie może być w $select
         params = {
-            "$select": "id,userPrincipalName,@odata.type"
+            "$select": "id,userPrincipalName"
         }
         resp = self._graph.get(f"/groups/{group_id}/members", params=params)
         resp.raise_for_status()
@@ -384,13 +385,35 @@ class AzureGroupManager:
         
         try:
             # Próba 1: Pobierz wszystkich członków i filtruj (najbardziej niezawodne)
+            # Uwaga: @odata.type jest automatycznie zwracane przez Graph API, nie może być w $select
             params = {
-                "$select": "id,userPrincipalName,@odata.type"
+                "$select": "id,userPrincipalName"
             }
-            resp = self._graph.get(f"/groups/{group_id}/members", params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            all_members = data.get("value", [])
+            
+            # Obsługa paginacji: Graph API może zwracać @odata.nextLink
+            all_members = []
+            endpoint_path = f"/groups/{group_id}/members"
+            
+            while endpoint_path:
+                resp = self._graph.get(endpoint_path, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                page_members = data.get("value", [])
+                all_members.extend(page_members)
+                
+                # Sprawdź czy jest następna strona
+                next_link = data.get("@odata.nextLink")
+                if next_link:
+                    logger.debug(f"[list_user_members] Pagination: Retrieved {len(page_members)} members, more pages available")
+                    # @odata.nextLink zawiera pełny URL, wyciągnij tylko ścieżkę względną
+                    if next_link.startswith("https://graph.microsoft.com/v1.0"):
+                        endpoint_path = next_link.replace("https://graph.microsoft.com/v1.0", "")
+                        # Parametry są już w URL, nie podawaj params
+                        params = None
+                    else:
+                        endpoint_path = None
+                else:
+                    endpoint_path = None
             
             logger.debug(f"[list_user_members] Retrieved {len(all_members)} total members from group {group_id}")
             
@@ -408,7 +431,7 @@ class AzureGroupManager:
                             "userPrincipalName": upn
                         })
             
-            logger.info(f"[list_user_members] Found {len(user_members)} user members in group {group_id}")
+            logger.info(f"[list_user_members] Found {len(user_members)} user members in group {group_id} (from {len(all_members)} total members)")
             
         except Exception as e:
             logger.warning(
@@ -421,11 +444,32 @@ class AzureGroupManager:
                 params = {
                     "$select": "id,userPrincipalName"
                 }
-                resp = self._graph.get(f"/groups/{group_id}/members/microsoft.graph.user", params=params)
-                resp.raise_for_status()
-                data = resp.json()
-                user_members.extend(data.get("value", []))
-                logger.info(f"[list_user_members] Fallback endpoint found {len(user_members)} users")
+                
+                # Obsługa paginacji dla fallback endpointu
+                fallback_users = []
+                endpoint_path = f"/groups/{group_id}/members/microsoft.graph.user"
+                
+                while endpoint_path:
+                    resp = self._graph.get(endpoint_path, params=params)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    page_users = data.get("value", [])
+                    fallback_users.extend(page_users)
+                    
+                    # Sprawdź czy jest następna strona
+                    next_link = data.get("@odata.nextLink")
+                    if next_link:
+                        logger.debug(f"[list_user_members] Fallback pagination: Retrieved {len(page_users)} users, more pages available")
+                        if next_link.startswith("https://graph.microsoft.com/v1.0"):
+                            endpoint_path = next_link.replace("https://graph.microsoft.com/v1.0", "")
+                            params = None  # Parametry są już w URL
+                        else:
+                            endpoint_path = None
+                    else:
+                        endpoint_path = None
+                
+                user_members.extend(fallback_users)
+                logger.info(f"[list_user_members] Fallback endpoint found {len(fallback_users)} users")
             except Exception as e2:
                 logger.error(
                     f"[list_user_members] Both methods failed. Last error: {e2}",
