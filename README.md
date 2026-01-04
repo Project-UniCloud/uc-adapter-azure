@@ -176,11 +176,11 @@ All configuration is provided via environment variables at runtime:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `AZURE_TENANT_ID` | Azure AD Tenant ID (GUID) | `12345678-1234-1234-1234-123456789012` |
-| `AZURE_CLIENT_ID` | Azure AD Application (Service Principal) Client ID | `87654321-4321-4321-4321-210987654321` |
-| `AZURE_CLIENT_SECRET` | Azure AD Application Secret | `secret-value` |
-| `AZURE_SUBSCRIPTION_ID` | Azure Subscription ID (GUID) | `11111111-2222-3333-4444-555555555555` |
-| `AZURE_UDOMAIN` | Entra ID domain for user UPN construction | `yourdomain.onmicrosoft.com` |
+| `AZURE_TENANT_ID` | Azure AD Tenant ID (GUID) | `<AZURE_TENANT_ID>` |
+| `AZURE_CLIENT_ID` | Azure AD Application (Service Principal) Client ID | `<AZURE_CLIENT_ID>` |
+| `AZURE_CLIENT_SECRET` | Azure AD Application Secret | `<AZURE_CLIENT_SECRET>` |
+| `AZURE_SUBSCRIPTION_ID` | Azure Subscription ID (GUID) | `<AZURE_SUBSCRIPTION_ID>` |
+| `AZURE_UDOMAIN` | Entra ID domain for user UPN construction | `<AZURE_TENANT_DOMAIN>` |
 
 ### Configuration Validation
 
@@ -190,72 +190,108 @@ The adapter validates all required environment variables at startup via `config.
 
 Azure SDK clients are initialized using the factory pattern in `azure_clients.py`, with singleton instances cached using `@lru_cache`. All clients share a single `ClientSecretCredential` instance, ensuring efficient credential reuse.
 
+### Required Permissions
+
+The Service Principal (Azure AD application) must have the following permissions configured:
+
+#### Microsoft Graph (Application permissions)
+- `User.ReadWrite.All` - Full access to create, read, update, and delete users
+- `Group.ReadWrite.All` - Full access to create, read, update, and delete groups
+- **Important**: "Grant admin consent" must be executed for these permissions at the tenant level
+
+#### Azure RBAC (Subscription scope)
+- `Contributor` - Full access to manage resources, resource groups, and resource tags
+- `Cost Management Reader` - Read access to cost and billing data
+
+These roles must be assigned at the subscription level (`/subscriptions/<AZURE_SUBSCRIPTION_ID>`) for the Service Principal identified by `<AZURE_CLIENT_ID>`.
+
+For detailed setup instructions, see the [Configuration Guide](Opisowa_dokumentacja.md#11-instrukcja-konfiguracji-azureentra-id-zastępuje-pdf) in the technical documentation.
+
 ## Integration and Usage
 
 ### Service Interface
 
-The adapter exposes a gRPC service (`CloudAdapter`) on port **50053** (insecure channel). The service interface is defined in `protos/adapter_interface.proto` and includes methods for:
+The adapter exposes a gRPC service (`CloudAdapter`) on port `<GRPC_PORT>` (default: 50053). The service interface is defined in `protos/adapter_interface.proto` and includes methods for:
 
 - **Identity Operations**: `GetStatus`, `GroupExists`, `CreateGroupWithLeaders`, `CreateUsersForGroup`, `RemoveGroup`, `AssignPolicies`, `UpdateGroupLeaders`
 - **Cost Queries**: `GetTotalCostForGroup`, `GetTotalCostsForAllGroups`, `GetTotalCost`, `GetGroupCostWithServiceBreakdown`, `GetTotalCostWithServiceBreakdown`, `GetGroupCostsLast6MonthsByService`, `GetGroupMonthlyCostsLast6Months`
 - **Resource Management**: `GetAvailableServices`, `GetResourceCount`, `CleanupGroupResources`
 
+**gRPC Security Note**: The adapter uses an insecure gRPC channel (no TLS) by default in development. In production environments, secure transport should be configured through:
+- Reverse proxy with TLS termination (e.g., nginx, Envoy)
+- mTLS (mutual TLS) for service-to-service communication
+- Network segmentation and private networks for trusted communication
+
+The adapter does not provide built-in TLS configuration; security should be implemented at the infrastructure layer.
+
 ### Integration Pattern
 
 The backend system connects to the adapter via gRPC and invokes methods as needed. The adapter operates as a stateless service, with each request containing all necessary context. State is maintained in Azure services (Entra ID, Resource Manager), not within the adapter.
+
+### Quick Start
+
+1. Configure environment variables (see [Configuration](#configuration) section)
+2. Install dependencies: `pip install -r requirements.txt`
+3. Run the adapter: `python main.py`
+4. The gRPC server starts on port `<GRPC_PORT>` (default: 50053)
+
+For Docker deployment:
+```bash
+docker-compose up
+```
+
+For detailed setup, architecture, and API documentation, see: **[Opisowa_dokumentacja.md](Opisowa_dokumentacja.md)**
+
+### Testing
+
+The project includes several test suites located in the `tests/` directory:
+
+**Smoke tests** (manual functional testing):
+- `smoke_test.py` - Tests user and group management operations
+  - Run: `python tests/smoke_test.py`
+- `limit_smoke_test.py` - Tests resource limit monitoring
+  - Run: `python tests/limit_smoke_test.py`
+
+**Unit tests** (automated testing):
+- `test_get_status.py` - Health check endpoint tests
+  - Run: `python -m unittest tests.test_get_status`
+- Additional unit tests cover RBAC, cost queries, and integration scenarios
+
+**Running all tests**:
+```bash
+python -m unittest discover tests
+```
+
+**Note**: All tests require valid Azure credentials configured via environment variables.
 
 ### Deployment
 
 The adapter is deployed as a Docker container. The container image is built from the provided `Dockerfile` and configured via environment variables. For local development, `docker-compose.yml` provides a convenient setup. Production deployment uses the main `uc-docker` orchestration.
 
-## Limitations
+See [Deployment and Production Environment](Opisowa_dokumentacja.md#8-deployment-i-środowisko-produkcyjne) section in the technical documentation for detailed deployment instructions.
 
-### Current Implementation Limitations
+## Limitations and Known Issues
 
-1. **Subscription-Scope RBAC Only**: Role assignments are performed only at subscription scope. Resource group or resource-level assignments are not supported.
+For a comprehensive list of limitations, design trade-offs, and known issues, see the [Limitations and Known Problems](Opisowa_dokumentacja.md#9-ograniczenia-i-znane-problemy) section in the technical documentation.
 
-2. **Single Resource Type per Group**: While `AssignPolicies` supports multiple resource types, the initial group creation (`CreateGroupWithLeaders`) assigns only the first resource type from the request.
+Key limitations:
+- Subscription-scope RBAC only (resource group scope not supported)
+- Tag-based resource discovery (resources must be tagged with "Group" tag)
+- Cost query latency (up to 48 hours for Azure Cost Management API)
+- Eventual consistency handling via retries (no webhook support)
 
-3. **Tag-Based Resource Discovery**: Resource cleanup relies on the "Group" tag being present on resources. Resources created without proper tagging may not be discoverable for cleanup.
+## Documentation
 
-4. **Cost Query Latency**: Azure Cost Management API data may have up to 48-hour latency. Real-time cost queries are not supported.
+For comprehensive technical documentation, architecture details, API reference, and configuration instructions, see:
 
-5. **User Deletion Strategy**: User deletion during group teardown requires UPN-based fallback search when group membership enumeration fails due to replication delays.
-
-6. **Name Normalization**: Group names are normalized (spaces → dashes) for compatibility, which may cause collisions if names differ only by whitespace.
-
-### Design Trade-offs
-
-1. **Eventual Consistency Handling**: The adapter uses polling and retries rather than webhooks, trading latency for implementation simplicity.
-
-2. **Client Caching**: Azure SDK clients are cached as singletons, reducing initialization overhead but preventing per-request credential rotation.
-
-3. **Synchronous Operations**: All operations are synchronous, blocking the gRPC thread. Async operations would improve throughput but add complexity.
-
-## Future Development Directions
-
-### Potential Extensions
-
-1. **Resource Group Scope Support**: Extend RBAC assignment to support resource group and resource-level scopes in addition to subscription scope.
-
-2. **Async gRPC Operations**: Refactor handlers to use async/await patterns for improved concurrency and throughput.
-
-3. **Webhook-Based Consistency**: Implement webhook listeners for Azure AD change notifications to reduce polling delays.
-
-4. **Multi-Subscription Support**: Extend the adapter to operate across multiple subscriptions within a single tenant.
-
-5. **Resource Tagging Enforcement**: Add proactive tagging mechanisms to ensure resources are tagged at creation time.
-
-6. **Cost Budget Alerts**: Integrate Azure Budget API to provide proactive cost threshold alerts.
-
-7. **Audit Logging**: Enhanced logging and audit trail generation for compliance and debugging.
-
-### Non-Goals
-
-- Support for multiple Azure tenants (cross-tenant scenarios)
-- Direct resource creation (remains user responsibility)
-- Real-time cost monitoring (latency is inherent to Cost Management API)
-- Custom RBAC role definition creation (uses built-in Azure roles only)
+**[Opisowa_dokumentacja.md](Opisowa_dokumentacja.md)** - Complete technical documentation including:
+- Detailed architecture overview
+- File structure and module descriptions
+- gRPC endpoint documentation
+- RBAC mechanism explanation
+- Deployment and production setup
+- Azure/Entra ID configuration guide
+- Testing and verification procedures
 
 ## Academic Context
 

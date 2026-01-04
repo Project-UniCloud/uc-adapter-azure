@@ -61,7 +61,7 @@ class IdentityHandlers:
                 logger.error("[GetStatus] rbac_manager not initialized")
                 resp = pb2.StatusResponse()
                 resp.isHealthy = False
-                    return resp
+                return resp
             
             if hasattr(self, 'resource_finder'):
                 if self.resource_finder is None:

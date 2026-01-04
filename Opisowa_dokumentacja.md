@@ -64,15 +64,15 @@ Adapter wykorzystuje wzorzec **Handler Pattern**, gdzie główny serwer gRPC (`C
 
 ### 3.1. Pliki główne
 
-#### `main.py` (143 linie)
+#### `main.py` (~137 linii)
 **Rola**: Punkt wejścia aplikacji, inicjalizacja serwera gRPC.
 
 **Kluczowe komponenty**:
 - `CloudAdapterServicer` - główna klasa serwera gRPC implementująca interfejs `CloudAdapter`
-- `serve()` - funkcja uruchamiająca serwer gRPC na porcie 50053
+- `serve()` - funkcja uruchamiająca serwer gRPC na porcie 50053 (insecure channel)
 
 **Metody RPC** (delegowane do handlerów):
-- **Identity Management**: `GetStatus`, `GroupExists`, `CreateGroupWithLeaders`, `CreateUsersForGroup`, `RemoveGroup`, `AssignPolicies`
+- **Identity Management**: `GetStatus`, `GroupExists`, `CreateGroupWithLeaders`, `CreateUsersForGroup`, `RemoveGroup`, `AssignPolicies`, `UpdateGroupLeaders`
 - **Cost Monitoring**: `GetTotalCostForGroup`, `GetTotalCostsForAllGroups`, `GetTotalCost`, `GetGroupCostWithServiceBreakdown`, `GetTotalCostWithServiceBreakdown`, `GetGroupCostsLast6MonthsByService`, `GetGroupMonthlyCostsLast6Months`
 - **Resource Management**: `GetAvailableServices`, `GetResourceCount`, `CleanupGroupResources`
 
@@ -87,15 +87,21 @@ def __init__(self):
     # Handlery otrzymują menedżerów jako zależności
 ```
 
-#### `azure_clients.py` (88 linii)
+#### `azure_clients.py` (~100 linii)
 **Rola**: Centralny moduł dostarczający klientów Azure SDK (analogiczny do `boto3` w AWS).
 
-**Funkcje**:
+**Funkcje** (wszystkie z `@lru_cache` dla singletonów):
 - `get_credential()` - zwraca `ClientSecretCredential` (uwierzytelnianie)
 - `get_graph_client()` - klient Microsoft Graph API (zarządzanie użytkownikami/grupami)
 - `get_resource_client()` - `ResourceManagementClient` (zarządzanie zasobami)
 - `get_compute_client()` - `ComputeManagementClient` (zarządzanie maszynami wirtualnymi)
-- `get_cost_client()` - `CostManagementClient` (monitorowanie kosztów)
+- `get_cost_client()` - `CostManagementClient` (monitorowanie kosztów, wymusza HTTPS endpoint)
+
+**Funkcje pomocnicze**:
+- `_validate_https_url(url)` - waliduje, że URL używa HTTPS
+- `_validate_scope(scope)` - waliduje format scope (musi zaczynać się od `/subscriptions/`)
+
+**Bezpieczeństwo**: Wszystkie funkcje walidują, że nie używają HTTP (tylko HTTPS) i poprawnego formatu scope.
 
 ### 3.2. Konfiguracja
 
@@ -107,7 +113,7 @@ def __init__(self):
 - `AZURE_CLIENT_ID` - ID aplikacji Azure AD
 - `AZURE_CLIENT_SECRET` - Klucz tajny aplikacji
 - `AZURE_SUBSCRIPTION_ID` - ID subskrypcji Azure
-- `AZURE_UDOMAIN` - Domena Azure AD (np. `domain.onmicrosoft.com`)
+- `AZURE_UDOMAIN` - Domena Azure AD (np. `<AZURE_TENANT_DOMAIN>`)
 
 **Funkcje**:
 - `validate_config()` - waliduje obecność wszystkich wymaganych zmiennych
@@ -154,6 +160,14 @@ def __init__(self):
    - Przypisuje role RBAC do grupy na podstawie typów zasobów
    - Obsługuje wiele typów zasobów w jednym wywołaniu
    - Zwraca `AssignPoliciesResponse(success=True/False, message=...)`
+
+7. **`update_group_leaders(request, context)`**
+   - Aktualizuje liderów istniejącej grupy (pełna synchronizacja)
+   - Usuwa starych właścicieli, dodaje nowych
+   - Tworzy nowych użytkowników-liderów jeśli nie istnieją
+   - Dodaje nowych liderów jako członków i właścicieli grupy
+   - Używa tego samego request/response co `CreateGroupWithLeaders`
+   - Zwraca `GroupCreatedResponse(groupName=...)`
 
 #### `handlers/cost_handlers.py` (235 linii)
 **Rola**: Implementacja zapytań o koszty Azure.
@@ -220,22 +234,30 @@ def __init__(self):
 - `_login_to_upn(login)` - konwertuje login na UPN (User Principal Name)
 - `_generate_initial_password(group_name)` - generuje hasło zgodne z polityką Azure AD
 
-#### `identity/group_manager.py` (243 linie)
+#### `identity/group_manager.py` (~439 linii)
 **Rola**: Zarządzanie grupami w Azure AD przez Microsoft Graph API.
 
-**Metody**:
-- `create_group(name, description)` - tworzy grupę bezpieczeństwa (security group)
+**Metody główne**:
+- `create_group(name, description, create_resource_group)` - tworzy grupę bezpieczeństwa (security group)
+  - Opcjonalnie tworzy Azure Resource Group `rg-{normalized_name}` z tagiem `Group`
+  - Zwraca tuple `(group_id, resource_group_name)`
 - `delete_group(group_id)` - usuwa grupę
 - `get_group_by_id(group_id)` - pobiera grupę po ID
 - `get_group_by_name(name)` - wyszukuje grupę po nazwie (normalizuje przed wyszukiwaniem)
+
+**Metody zarządzania członkami**:
 - `add_member(group_id, user_id)` - dodaje członka do grupy (z retry logic dla replikacji)
 - `add_owner(group_id, user_id)` - dodaje właściciela grupy (z retry logic)
 - `remove_member(group_id, user_id)` - usuwa członka z grupy
-- `list_members(group_id)` - zwraca listę członków grupy
+- `remove_owner(group_id, user_id)` - usuwa właściciela grupy
+- `list_members(group_id)` - zwraca listę członków grupy (ObjectIds)
+- `list_owners(group_id)` - zwraca listę właścicieli grupy (ObjectIds)
 
 **Mechanizm retry**: Metody `add_member` i `add_owner` implementują retry logic (5 prób, 3s opóźnienie) dla obsługi opóźnionej replikacji Azure AD.
 
-#### `identity/rbac_manager.py` (148 linii)
+**Resource Group**: Automatycznie tworzy Resource Group dla każdej grupy (fallback dla cleanup jeśli tagowanie nie działa).
+
+#### `identity/rbac_manager.py` (~443 linie)
 **Rola**: Zarządzanie przypisaniami ról RBAC w Azure.
 
 **Mapowanie typów zasobów na role**:
@@ -244,18 +266,29 @@ RESOURCE_TYPE_ROLES = {
     "vm": "Virtual Machine Contributor",
     "storage": "Storage Account Contributor",
     "network": "Network Contributor",
-    "compute": "Virtual Machine Contributor",
 }
+RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]  # Kolejność przypisywania ról
 ```
 
-**Metody**:
+**Metody główne**:
 - `_get_role_definition_id(role_name)` - wyszukuje ID definicji roli w subskrypcji
 - `assign_role_to_group(resource_type, group_id, scope)` - przypisuje rolę RBAC do grupy
   - Wyszukuje definicję roli na podstawie typu zasobu
+  - Sprawdza czy przypisanie już istnieje (idempotentność)
   - Tworzy przypisanie roli na scope subskrypcji (domyślnie) lub resource group
+  - Weryfikuje utworzenie przypisania po operacji
   - Implementuje retry logic (5 prób, 5s opóźnienie) dla obsługi `PrincipalNotFound` (opóźniona replikacja)
+  - Zwraca tuple `(success: bool, reason: str)`
+
+**Metody pomocnicze**:
+- `_find_existing_role_assignment(scope, principal_id, role_definition_id)` - sprawdza czy przypisanie już istnieje
+- `_verify_role_assignment_exists(scope, assignment_name)` - weryfikuje istnienie przypisania po utworzeniu
+- `remove_role_assignments_for_group(group_id, scope)` - usuwa wszystkie przypisania ról dla grupy (z retry logic)
+- `remove_role_assignments_for_user(user_id, scope)` - usuwa wszystkie przypisania ról dla użytkownika (z retry logic)
 
 **Scope przypisania**: Domyślnie poziom subskrypcji (`/subscriptions/{subscription_id}`), można zawęzić do resource group.
+
+**Idempotentność**: Wszystkie operacje są idempotentne - wielokrotne wywołanie nie powoduje duplikacji.
 
 #### `identity/utils.py` (47 linii)
 **Rola**: Funkcje pomocnicze do normalizacji nazw.
@@ -263,6 +296,18 @@ RESOURCE_TYPE_ROLES = {
 **Funkcje**:
 - `normalize_name(name)` - normalizuje nazwy (spaces/underscores → dashes, polskie znaki → ASCII)
 - `build_username_with_group_suffix(user_login, group_name)` - buduje username z suffixem grupy (format: `{login}-{normalized_group}`)
+
+#### `identity/resource_tagging.py` (76 linii)
+**Rola**: Mechanizm tagowania zasobów Azure z tagiem `Group` (odpowiednik AWS auto-tagging).
+
+**Funkcje**:
+- `ensure_resource_tagged(resource_id, group_name)` - dodaje tag `Group` do zasobu Azure
+  - Pobiera aktualne tagi zasobu
+  - Aktualizuje tag `Group` z znormalizowaną nazwą grupy
+  - Wymaga uprawnień do modyfikacji zasobów (np. rola Tag Contributor)
+  - Zwraca `True` jeśli tagowanie się powiodło
+
+**Uwaga**: Tagowanie może być wywoływane przez użytkowników z odpowiednimi rolami. Nie jest automatyczne (wymaga Azure Policy lub ręcznego wywołania).
 
 ### 3.5. Zarządzanie zasobami
 
@@ -322,17 +367,104 @@ RESOURCE_TYPE_ROLES = {
 
 ### 3.7. Protobuf
 
-#### `protos/adapter_interface.proto` (169 linii)
+#### `protos/adapter_interface.proto` (~169 linii)
 **Rola**: Definicja interfejsu gRPC w formacie Protocol Buffers.
 
-**Service `CloudAdapter`** - definiuje 13 metod RPC:
-- Identity: `GetStatus`, `GroupExists`, `CreateGroupWithLeaders`, `CreateUsersForGroup`, `RemoveGroup`, `AssignPolicies`
-- Cost: `GetTotalCostForGroup`, `GetTotalCostsForAllGroups`, `GetTotalCost`, `GetGroupCostWithServiceBreakdown`, `GetTotalCostWithServiceBreakdown`, `GetGroupCostsLast6MonthsByService`, `GetGroupMonthlyCostsLast6Months`
-- Resource: `GetAvailableServices`, `GetResourceCount`, `CleanupGroupResources`
+**Service `CloudAdapter`** - definiuje metody RPC:
+- **Identity**: `GetStatus`, `GroupExists`, `CreateGroupWithLeaders`, `CreateUsersForGroup`, `RemoveGroup`, `AssignPolicies`
+- **Cost**: `GetTotalCostForGroup`, `GetTotalCostsForAllGroups`, `GetTotalCost`, `GetGroupCostWithServiceBreakdown`, `GetTotalCostWithServiceBreakdown`, `GetGroupCostsLast6MonthsByService`, `GetGroupMonthlyCostsLast6Months`
+- **Resource**: `GetAvailableServices`, `GetResourceCount`, `CleanupGroupResources`
 
 **Wygenerowane pliki**:
-- `adapter_interface_pb2.py` - klasy Python dla komunikatów
-- `adapter_interface_pb2_grpc.py` - klasy Python dla serwisu gRPC
+- `adapter_interface_pb2.py` - klasy Python dla komunikatów (generowany przez protoc)
+- `adapter_interface_pb2_grpc.py` - klasy Python dla serwisu gRPC (generowany przez protoc)
+
+**Generowanie**: Użyj `generate_proto.sh` (Linux/Mac) lub `generate_proto.bat` (Windows) do regeneracji plików po zmianach w `.proto`.
+
+### 3.8. Deployment i infrastruktura
+
+#### `Dockerfile` (31 linii)
+**Rola**: Definicja obrazu Docker dla adaptera.
+
+**Charakterystyka**:
+- Bazowy obraz: `python:3.11-slim`
+- Użytkownik: `adapteruser` (UID 1001, non-root)
+- Port: `50053` (gRPC)
+- Entrypoint: `python main.py`
+
+**Kroki build**:
+1. Kopiowanie `requirements.txt` i instalacja zależności
+2. Kopiowanie kodu aplikacji
+3. Zmiana właściciela na non-root user
+4. Uruchomienie jako non-root user
+
+#### `docker-compose.yml` (25 linii)
+**Rola**: Konfiguracja lokalnego środowiska deweloperskiego.
+
+**Konfiguracja**:
+- Serwis: `azure-adapter`
+- Port mapping: `50053:50053`
+- Zmienne środowiskowe: Wszystkie wymagane zmienne Azure (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, etc.)
+- Healthcheck: Automatyczny health check przez wywołanie `GetStatus` gRPC
+- Restart policy: `unless-stopped`
+
+#### `.github/workflows/pipeline.yml`
+**Rola**: CI/CD pipeline dla GitHub Actions.
+
+**Funkcjonalność**:
+- **Build job**: Buduje obraz Docker i pushuje do GHCR (GitHub Container Registry)
+- **Deploy job**: Wywołuje webhook restart dla automatycznego wdrożenia (jeśli push do `main`)
+
+**Trigger**: Push i Pull Request do brancha `main`
+
+### 3.9. Testy i weryfikacja działania
+
+Folder `tests/` zawiera testy integracyjne i smoke testy:
+
+#### Rodzaje testów
+
+**Smoke testy** (ręczne testy funkcjonalności):
+- `smoke_test.py` - podstawowe smoke testy dla `user_manager` i `group_manager`
+  - Testuje tworzenie grupy, użytkownika, dodawanie członków
+  - Uruchomienie: `python tests/smoke_test.py`
+- `limit_smoke_test.py` - testy limitów zasobów (liczenie użytkowników, VMs)
+  - Uruchomienie: `python tests/limit_smoke_test.py`
+
+**Unit testy** (unittest framework):
+- `test_get_status.py` - testy health check endpoint (`GetStatus`)
+  - Testuje inicjalizację komponentów, obsługę błędów
+  - Uruchomienie: `python -m unittest tests.test_get_status`
+- `test_required_methods.py` - weryfikacja wymaganych metod RPC
+
+**Testy integracyjne**:
+- `test_backend_connection.py` - testy formatów requestów zgodnych z backendem
+  - Weryfikuje formaty protobuf messages dla integracji z backendem
+- `test_rbac_idempotency.py` - testy idempotentności operacji RBAC
+  - Sprawdza bezpieczeństwo wielokrotnego przypisywania ról
+- `test_get_available_services_direct.py` - testy dostępnych usług
+  - Weryfikuje listę dostępnych typów zasobów
+- `test_get_total_costs_for_all_groups.py` - testy zapytań kosztowych
+  - Testuje integrację z Azure Cost Management API
+- `test_teardown_flow.py` - testy procesu usuwania grup i zasobów
+- `test_teardown_users.py` - testy usuwania użytkowników
+- `test_fixes_integration.py` - testy integracyjne poprawek
+- `test_https_validation.py` - testy walidacji HTTPS
+- `client_test.py` - testy klientów Azure SDK
+
+#### Uruchomienie testów
+
+**Wszystkie unit testy**:
+```bash
+python -m unittest discover tests
+```
+
+**Konkretny test**:
+```bash
+python -m unittest tests.test_get_status
+python tests/smoke_test.py  # dla smoke testów
+```
+
+**Wymagania**: Wszystkie testy wymagają skonfigurowanych zmiennych środowiskowych (`.env` lub export) oraz prawidłowych credentials Azure.
 
 ---
 
@@ -459,6 +591,23 @@ AssignPoliciesRequest {
 ```
 **Response**: `AssignPoliciesResponse { bool success; string message }`
 **Opis**: Przypisuje role RBAC do grupy na podstawie typów zasobów. Obsługuje wiele typów w jednym wywołaniu.
+
+##### `UpdateGroupLeaders`
+**Request**: `CreateGroupWithLeadersRequest` (ten sam co dla `CreateGroupWithLeaders`)
+```protobuf
+CreateGroupWithLeadersRequest {
+  repeated string resourceTypes = 1;
+  repeated string leaders = 2;      // Nowi liderzy (zastąpią starych)
+  string groupName = 3;
+}
+```
+**Response**: `GroupCreatedResponse { string groupName }`
+**Opis**: 
+- Aktualizuje liderów istniejącej grupy (pełna synchronizacja)
+- Usuwa starych właścicieli grupy, dodaje nowych
+- Tworzy nowych użytkowników-liderów jeśli nie istnieją
+- Dodaje nowych liderów jako członków i właścicieli grupy
+- Operacja wymaga, aby grupa już istniała
 
 #### 5.2.2. Cost Monitoring
 
@@ -678,9 +827,9 @@ RESOURCE_TYPE_ROLES = {
 3. Wszyscy członkowie grupy dziedziczą uprawnienia
 
 **Przykład**:
-- Grupa: `AI-2024L` (ObjectId: `12345678-1234-1234-1234-123456789abc`)
-- Rola: `Virtual Machine Contributor` (RoleDefinitionId: `/subscriptions/{sub_id}/providers/Microsoft.Authorization/roleDefinitions/...`)
-- Scope: `/subscriptions/{subscription_id}`
+- Grupa: `AI-2024L` (ObjectId: `<AZURE_OBJECT_ID>`)
+- Rola: `Virtual Machine Contributor` (RoleDefinitionId: `/subscriptions/<AZURE_SUBSCRIPTION_ID>/providers/Microsoft.Authorization/roleDefinitions/...`)
+- Scope: `/subscriptions/<AZURE_SUBSCRIPTION_ID>`
 - Rezultat: Wszyscy członkowie grupy `AI-2024L` mogą zarządzać maszynami wirtualnymi w całej subskrypcji
 
 ### 6.4. Uprawnienia dla poszczególnych typów zasobów
@@ -887,7 +1036,213 @@ RESOURCE_TYPE_ROLES = {
 
 ---
 
+## 8. Deployment i środowisko produkcyjne
+
+### 8.1. Wymagania systemowe
+
+- **Python**: 3.11+
+- **Docker**: Dla deploymentu kontenerowego
+- **Azure Subscription**: Aktywna subskrypcja z odpowiednimi uprawnieniami
+- **Service Principal**: Aplikacja Azure AD z wymaganymi uprawnieniami
+
+### 8.2. Wymagane uprawnienia Service Principal
+
+Service Principal (aplikacja Azure AD) musi mieć następujące uprawnienia:
+
+**Microsoft Graph API**:
+- `User.ReadWrite.All` - zarządzanie użytkownikami
+- `Group.ReadWrite.All` - zarządzanie grupami
+- `Directory.ReadWrite.All` - pełny dostęp do katalogu (opcjonalne, do czytania)
+
+**Azure RBAC** (na poziomie subskrypcji):
+- `User Access Administrator` lub `Owner` - dla przypisywania ról RBAC
+- `Cost Management Reader` - dla zapytań kosztowych (opcjonalne)
+
+**Azure Resource Manager**:
+- `Contributor` na poziomie subskrypcji - dla zarządzania zasobami i tagowania
+
+### 8.3. Konfiguracja zmiennych środowiskowych
+
+Wszystkie zmienne muszą być ustawione przed uruchomieniem:
+
+```bash
+AZURE_TENANT_ID=<AZURE_TENANT_ID>
+AZURE_CLIENT_ID=<AZURE_CLIENT_ID>
+AZURE_CLIENT_SECRET=<AZURE_CLIENT_SECRET>
+AZURE_SUBSCRIPTION_ID=<AZURE_SUBSCRIPTION_ID>
+AZURE_UDOMAIN=<AZURE_TENANT_DOMAIN>
+```
+
+**Walidacja**: `validate_config()` jest wywoływana przy starcie - brakujące zmienne powodują błąd startu.
+
+### 8.4. Uruchomienie lokalne
+
+**Bez Docker**:
+```bash
+pip install -r requirements.txt
+export AZURE_TENANT_ID=...
+# ... ustaw pozostałe zmienne
+python main.py
+```
+
+**Z Docker Compose**:
+```bash
+# Utwórz plik .env z zmiennymi środowiskowymi
+docker-compose up
+```
+
+### 8.5. Uruchomienie produkcyjne
+
+**Z obrazu Docker (GHCR)**:
+```bash
+docker pull ghcr.io/<OWNER>/uc-adapter-azure:latest
+docker run -d \
+  -p <GRPC_PORT>:<GRPC_PORT> \
+  -e AZURE_TENANT_ID=<AZURE_TENANT_ID> \
+  -e AZURE_CLIENT_ID=<AZURE_CLIENT_ID> \
+  -e AZURE_CLIENT_SECRET=<AZURE_CLIENT_SECRET> \
+  -e AZURE_SUBSCRIPTION_ID=<AZURE_SUBSCRIPTION_ID> \
+  -e AZURE_UDOMAIN=<AZURE_TENANT_DOMAIN> \
+  --name uc-adapter-azure \
+  --restart unless-stopped \
+  ghcr.io/<OWNER>/uc-adapter-azure:latest
+```
+
+**Health Check**: Kontener automatycznie sprawdza health przez `GetStatus` endpoint.
+
+### 8.6. Monitorowanie
+
+- **Logi**: Wszystkie logi są wyświetlane na stdout (konfiguracja w `main.py`)
+- **Health Check**: Endpoint `GetStatus` zwraca stan komponentów
+- **Docker Health Check**: Automatyczny health check co 30s (konfiguracja w `docker-compose.yml`)
+
+### 8.7. Bezpieczeństwo
+
+- **Credentials**: Nigdy nie są hardkodowane - zawsze ze zmiennych środowiskowych
+- **Non-root user**: Kontener uruchamiany jako non-root (`adapteruser`)
+- **HTTPS enforcement**: Wszystkie połączenia do Azure wymuszają HTTPS
+- **Scope validation**: Wszystkie scope są walidowane przed użyciem
+
+---
+
+## 9. Ograniczenia i znane problemy
+
+### 9.1. Ograniczenia implementacji
+
+1. **Subscription-Scope RBAC**: Role przypisywane tylko na poziomie subskrypcji (nie resource group)
+2. **Tag-based Discovery**: Resource cleanup wymaga tagu `Group` na zasobach
+3. **Cost Query Latency**: Azure Cost Management API może mieć opóźnienie do 48h
+4. **Eventual Consistency**: Azure AD replikacja może trwać do kilku sekund (obsługiwane przez retry)
+5. **Single Resource Type per Group**: `CreateGroupWithLeaders` używa tylko pierwszego typu z listy
+
+### 9.2. Znane problemy
+
+- **PrincipalNotFound**: Może wystąpić podczas przypisywania ról zaraz po utworzeniu grupy (obsługiwane przez retry logic)
+- **Cost API delays**: Dane kosztowe mogą nie być dostępne od razu po utworzeniu zasobu
+- **Resource tagging**: Wymaga ręcznego tagowania lub Azure Policy (nie automatyczne)
+
+### 9.3. Best practices
+
+1. **Retry logic**: Wszystkie operacje na Azure AD mają retry logic dla eventual consistency
+2. **Idempotentność**: Wszystkie operacje są idempotentne - bezpieczne wielokrotne wywołanie
+3. **Error handling**: Błędy są logowane z pełnym stack trace dla debugowania
+4. **Normalizacja nazw**: Wszystkie nazwy są normalizowane dla kompatybilności z AWS adapterem
+
+---
+
+## 10. Podsumowanie
+
+Azure Cloud Adapter jest kompleksowym komponentem integracyjnym systemu UniCloud, zapewniającym:
+
+✅ **Spójny interfejs gRPC** dla operacji Azure (identyczny z AWS adapterem)  
+✅ **Zarządzanie tożsamościami** w Microsoft Entra ID (użytkownicy, grupy)  
+✅ **Kontrola dostępu RBAC** z automatycznym przypisywaniem ról  
+✅ **Monitorowanie kosztów** z podziałem na grupy i usługi  
+✅ **Zarządzanie cyklem życia zasobów** (wyszukiwanie, usuwanie po tagach)  
+✅ **Architektura modułowa** z wyraźnym podziałem odpowiedzialności  
+✅ **Obsługa eventual consistency** Azure AD przez retry logic  
+✅ **Deployment kontenerowy** z automatyzacją CI/CD  
+
+Adapter jest gotowy do użycia produkcyjnego i został przetestowany w środowisku UniCloud.
+
+---
+
+---
+
+## 11. Instrukcja konfiguracji Azure/Entra ID (zastępuje PDF)
+
+### Cel
+Celem jest przygotowanie tożsamości aplikacji (Service Principal) w Microsoft Entra ID oraz nadanie jej:
+1) uprawnień Microsoft Graph (na poziomie Entra ID),
+2) ról RBAC na poziomie subskrypcji Azure (dostęp do zasobów i kosztów).
+
+### Wymagania wstępne
+- Dostęp do Azure Portal oraz Microsoft Entra ID.
+- Uprawnienia pozwalające na:
+  - tworzenie rejestracji aplikacji w Entra ID,
+  - nadawanie uprawnień API i wykonanie „Grant admin consent",
+  - przypisywanie ról RBAC na poziomie subskrypcji.
+
+### Krok 1 — Rejestracja aplikacji w Microsoft Entra ID (App registration)
+1. Azure Portal → **Microsoft Entra ID**.
+2. **App registrations** → **New registration**.
+3. Ustaw:
+   - **Name**: `<APP_REGISTRATION_NAME>` (rekomendowane: `uc-adapter-azure`),
+   - **Supported account types**: single-tenant,
+   - **Redirect URI**: puste (jeśli brak logowania interaktywnego).
+4. **Register**.
+
+Zanotuj:
+- **Application (client) ID** → `<AZURE_CLIENT_ID>`
+- **Directory (tenant) ID** → `<AZURE_TENANT_ID>`
+
+### Krok 2 — Utworzenie Client Secret
+1. Aplikacja → **Certificates & secrets** → **New client secret**.
+2. Ustaw opis i datę wygaśnięcia zgodnie z polityką projektu.
+3. Skopiuj natychmiast pole **Value** i zapisz jako `<AZURE_CLIENT_SECRET>`.
+
+Uwaga: **Secret ID nie jest hasłem** — adapter wykorzystuje wyłącznie wartość **Value**.
+Nie commituj sekretu do repozytorium; przechowuj go w bezpiecznym magazynie sekretów.
+
+### Krok 3 — Microsoft Graph: API permissions (Application permissions)
+1. Aplikacja → **API permissions** → **Add a permission** → **Microsoft Graph**.
+2. Wybierz **Application permissions**.
+3. Dodaj:
+   - `User.ReadWrite.All`
+   - `Group.ReadWrite.All`
+4. Wykonaj **Grant admin consent** dla tenant.
+
+Uwaga: w środowiskach least-privilege zweryfikuj, czy adapter faktycznie wymaga *ReadWrite*.
+
+### Krok 4 — Azure RBAC: Role assignments na subskrypcji
+1. Subskrypcja `<AZURE_SUBSCRIPTION_ID>` → **Access control (IAM)**.
+2. **Add role assignment** dla Service Principal `<APP_REGISTRATION_NAME>`.
+3. Przypisz role:
+   - `Contributor`
+   - `Cost Management Reader`
+4. Sprawdź przypisania ról na właściwym zakresie (scope).
+
+Uwaga: dobór ról powinien wynikać z faktycznych operacji adaptera; stosuj zasadę minimalnych uprawnień.
+
+### Krok 5 — Konfiguracja zmiennych środowiskowych adaptera
+Co najmniej:
+- `AZURE_TENANT_ID=<AZURE_TENANT_ID>`
+- `AZURE_CLIENT_ID=<AZURE_CLIENT_ID>`
+- `AZURE_CLIENT_SECRET=<AZURE_CLIENT_SECRET>`
+- `AZURE_SUBSCRIPTION_ID=<AZURE_SUBSCRIPTION_ID>`
+- `AZURE_UDOMAIN=<AZURE_TENANT_DOMAIN>`
+
+### Checklista (gdy konfiguracja nie działa)
+- Czy wykonano **Grant admin consent** dla Microsoft Graph?
+- Czy użyto wartości **Value** dla secretu (a nie „Secret ID")?
+- Czy RBAC przypisano na właściwym scope?
+- Czy wartości pochodzą z tej samej rejestracji aplikacji?
+- Czy `<AZURE_SUBSCRIPTION_ID>` wskazuje subskrypcję z poprawnie nadanymi rolami?
+
+---
+
 **Data utworzenia raportu**: 2025-01-XX  
+**Ostatnia aktualizacja**: 2025-01-XX  
 **Wersja adaptera**: 1.0  
 **Autor**: System UniCloud
 
