@@ -1,20 +1,9 @@
 # cost_monitoring/limit_manager.py
 
 """
-Proste limity zasobów w środowisku Azure na potrzeby adaptera.
-
-Rola:
-- policzenie, ilu użytkowników mamy w Entra ID (Azure AD),
-- policzenie, ile maszyn wirtualnych jest w subskrypcji,
-- metody ensure_* do egzekwowania limitów (rzucają wyjątek przy przekroczeniu).
-- funkcje do pobierania kosztów z Azure Cost Management API
-
-To jest funkcjonalny odpowiednik AWS-owego LimitManagera, ale zamiast
-budżetów/Cost Explorera opiera się na prostych licznikach obiektów:
-- użytkownicy (Graph /users),
-- maszyny wirtualne (ComputeManagementClient.virtual_machines).
-
-Dodatkowo zawiera funkcje do pobierania kosztów z Azure Cost Management API.
+Resource limit monitoring and cost queries for Azure adapter.
+Counts users in Entra ID and VMs in subscription.
+Provides cost query functions using Azure Cost Management API.
 """
 
 import logging
@@ -33,25 +22,14 @@ logger = logging.getLogger(__name__)
 
 
 class LimitExceededError(RuntimeError):
-    """
-    Wyjątek rzucany, gdy przekroczony jest skonfigurowany limit zasobów.
-    """
-
+    """Raised when configured resource limit is exceeded."""
     pass
 
 
 class LimitManager:
     """
-    Klasa odpowiedzialna za monitorowanie prostych limitów:
-    - liczby użytkowników w katalogu,
-    - liczby VM-ek w subskrypcji lub w danej grupie zasobów.
-
-    Do komunikacji z Azure używa:
-    - Microsoft Graph (GraphClient) – liczenie użytkowników,
-    - Azure Compute Management (ComputeManagementClient) – liczenie VM-ek.
-
-    Domyślnie pobiera klientów z azure_clients.get_graph_client / get_compute_client,
-    ale w testach można je wstrzyknąć ręcznie.
+    Monitors resource limits: user count in Entra ID, VM count in subscription.
+    Provides cost query functions using Azure Cost Management API.
     """
 
     def __init__(
@@ -59,34 +37,21 @@ class LimitManager:
         graph_client: Optional[GraphClient] = None,
         compute_client=None,
     ) -> None:
-        # Graph – użytkownicy Entra ID
         self._graph = graph_client or get_graph_client()
-        # Compute – maszyny wirtualne
         self._compute = compute_client or get_compute_client()
-
-    # =========================
-    #  UŻYTKOWNICY
-    # =========================
 
     def count_users(self) -> int:
         """
-        Zwraca przybliżoną (w praktyce bardzo dokładną) liczbę użytkowników
-        w katalogu Entra ID.
-
-        Technicznie:
-        - używamy /users?$count=true&$top=1
-        - wymagany nagłówek ConsistencyLevel: eventual,
-        - interesuje nas pole @odata.count.
-
-        Dla małego katalogu (jak na subskrypcji studenckiej / trial)
-        jest to w pełni wystarczające.
+        Returns approximate user count in Entra ID directory.
+        
+        Uses /users?$count=true&$top=1 with ConsistencyLevel: eventual header.
+        Returns @odata.count value.
         """
         headers = {
             "ConsistencyLevel": "eventual",
         }
         params = {
             "$count": "true",
-            # nie potrzebujemy wszystkich obiektów, interesuje nas tylko licznik
             "$top": 1,
         }
 

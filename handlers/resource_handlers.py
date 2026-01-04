@@ -56,13 +56,11 @@ class ResourceHandlers:
         
         if not resource_type:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("Pole resourceType nie może być puste (np. 'vm', 'storage').")
+            context.set_details("resourceType cannot be empty (e.g., 'vm', 'storage')")
             return pb2.ResourceCountResponse()
         
         try:
-            # Find resources by group tag
             resources = self.resource_finder.find_resources_by_tags({"Group": group_name})
-            # Filter by service type
             count = sum(1 for r in resources if (r.get("service") or "").lower() == resource_type)
             return pb2.ResourceCountResponse(count=count)
         except Exception as e:
@@ -73,13 +71,11 @@ class ResourceHandlers:
     
     def cleanup_group_resources(self, request, context):
         """
-        Usuwa wszystkie zasoby Azure związane z grupą (VMs, storage, etc.).
-        Backend expects this method (called during group cleanup).
+        Removes all Azure resources associated with group (VMs, storage, etc.).
         
-        Strategia cleanup:
-        1. Najpierw próbuje znaleźć i usunąć zasoby po tagach Group
-        2. Jeśli nie znaleziono zasobów po tagach, używa fallback: usuwa Resource Group rg-{group_name}
-           (to usunie wszystkie zasoby w tej RG, nawet bez tagów)
+        Strategy:
+        1. Find and delete resources by Group tags
+        2. Fallback: delete Resource Group rg-{group_name} if no tagged resources found
         """
         group_name: str = request.groupName
         normalized_group_name = normalize_name(group_name)
@@ -87,13 +83,11 @@ class ResourceHandlers:
         try:
             deleted_resources = []
             
-            # Krok 1: Find resources tagged with group name
             resources = self.resource_finder.find_resources_by_tags({"Group": normalized_group_name})
             logger.info(
                 f"[CleanupGroupResources] Found {len(resources)} resources with tag Group={normalized_group_name}"
             )
             
-            # Delete resources found by tags
             for resource in resources:
                 try:
                     result_msg = self.resource_deleter.delete_resource(resource)
@@ -104,9 +98,7 @@ class ResourceHandlers:
                         f"[CleanupGroupResources] Error deleting resource {resource.get('name', 'unknown')}: {e}",
                         exc_info=True
                     )
-                    # Continue with other resources
             
-            # Krok 2: Fallback - jeśli nie znaleziono zasobów po tagach, spróbuj usunąć Resource Group
             if not resources:
                 resource_group_name = f"rg-{normalized_group_name}"
                 logger.info(
@@ -117,7 +109,6 @@ class ResourceHandlers:
                 try:
                     resource_client = get_resource_client()
                     
-                    # Sprawdź czy RG istnieje
                     try:
                         rg = resource_client.resource_groups.get(resource_group_name)
                         if rg:
@@ -126,7 +117,6 @@ class ResourceHandlers:
                                 f"Deleting it (this will delete all resources in the RG)..."
                             )
                             
-                            # Usuń Resource Group (to usunie wszystkie zasoby w niej)
                             resource_client.resource_groups.begin_delete(resource_group_name).wait()
                             
                             deleted_resources.append(f"Deleted Resource Group: {resource_group_name}")
@@ -134,7 +124,6 @@ class ResourceHandlers:
                                 f"[CleanupGroupResources] Successfully deleted Resource Group '{resource_group_name}'"
                             )
                     except Exception as e:
-                        # RG nie istnieje - to OK
                         logger.info(
                             f"[CleanupGroupResources] Resource Group '{resource_group_name}' does not exist. "
                             f"Nothing to clean up."
@@ -145,9 +134,7 @@ class ResourceHandlers:
                         f"[CleanupGroupResources] Error during fallback Resource Group deletion: {e}",
                         exc_info=True
                     )
-                    # Nie traktujemy tego jako błąd krytyczny - może RG nie istnieje
             
-            # Przygotuj response
             if deleted_resources:
                 response = pb2.CleanupGroupResponse()
                 response.success = True

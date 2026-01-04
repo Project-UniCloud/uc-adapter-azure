@@ -40,11 +40,11 @@ class IdentityHandlers:
     def get_status(self, request, context):
         """
         Health check endpoint.
-        Sprawdza czy kluczowe komponenty są zainicjalizowane i dostępne.
-        Zgodnie z kontraktem Jira: zwraca true/false bez wyjątków na zewnątrz.
+        
+        Verifies that key components are initialized and available.
+        Returns true/false without raising exceptions.
         """
         try:
-            # Sprawdź czy komponenty są zainicjalizowane
             if not hasattr(self, 'user_manager') or self.user_manager is None:
                 logger.error("[GetStatus] user_manager not initialized")
                 resp = pb2.StatusResponse()
@@ -61,9 +61,8 @@ class IdentityHandlers:
                 logger.error("[GetStatus] rbac_manager not initialized")
                 resp = pb2.StatusResponse()
                 resp.isHealthy = False
-                return resp
+                    return resp
             
-            # Check resource_finder if it was provided (optional dependency)
             if hasattr(self, 'resource_finder'):
                 if self.resource_finder is None:
                     logger.error("[GetStatus] resource_finder not initialized")
@@ -79,7 +78,6 @@ class IdentityHandlers:
                     resp.isHealthy = False
                     return resp
             
-            # Sprawdź czy kluczowe klienty Azure mogą być utworzone
             try:
                 from azure_clients import get_credential, get_graph_client, get_cost_client
                 
@@ -110,7 +108,6 @@ class IdentityHandlers:
                 resp.isHealthy = False
                 return resp
             
-            # Sprawdź czy cost_manager jest dostępny
             try:
                 if not hasattr(cost_manager, 'get_total_cost_for_group'):
                     logger.error("[GetStatus] cost_manager.get_total_cost_for_group not available")
@@ -131,7 +128,6 @@ class IdentityHandlers:
                 resp.isHealthy = False
                 return resp
             
-            # Wszystkie checki przeszły
             resp = pb2.StatusResponse()
             resp.isHealthy = True
             return resp
@@ -143,10 +139,7 @@ class IdentityHandlers:
             return resp
     
     def group_exists(self, request, context):
-        """
-        Sprawdza, czy grupa o podanej nazwie istnieje w Entra ID.
-        Normalizuje nazwę przed wyszukiwaniem (spaces → dashes).
-        """
+        """Checks if group with given name exists in Entra ID. Normalizes name before search."""
         group_name: str = request.groupName
         normalized_name = normalize_name(group_name)
 
@@ -163,20 +156,17 @@ class IdentityHandlers:
     
     def create_users_for_group(self, request, context):
         """
-        Tworzy użytkowników i dodaje ich do istniejącej grupy.
-        Dodaje suffix grupy do username (matches AWS adapter format).
+        Creates users and adds them to existing group.
         
-        Zgodnie z kontraktem Jira:
-        - Kontynuuje mimo błędów części użytkowników
-        - Sprawdza duplikacje przed dodaniem
-        - Message: dokładnie "Users successfully added" (lub zawiera ten tekst)
+        Adds group suffix to username (matches AWS adapter format).
+        Continues despite partial user errors. Checks for duplicates before adding.
+        Returns message "Users successfully added".
         """
         group_name: str = request.groupName
         users: List[str] = list(request.users)
         normalized_group_name = normalize_name(group_name)
 
         try:
-            # Sprawdź czy grupa istnieje (z retry logic dla replikacji Azure AD)
             max_attempts = 5
             delay_seconds = 3.0
             group = None
@@ -204,14 +194,12 @@ class IdentityHandlers:
 
             group_id = group["id"]
             
-            # 1. Deduplikacja listy users
             unique_users = list(dict.fromkeys(users))
             if len(unique_users) != len(users):
                 logger.info(
                     f"[CreateUsersForGroup] Deduplicated users: {len(users)} -> {len(unique_users)}"
                 )
             
-            # 2. Pobierz istniejących członków grupy
             existing_members = {}
             try:
                 members = self.group_manager.list_members(group_id)
@@ -226,7 +214,6 @@ class IdentityHandlers:
                     "Continuing without duplicate check."
                 )
             
-            # 3. Zbieraj sukcesy i błędy per użytkownik
             succeeded_users: List[str] = []
             failed_users: List[tuple[str, str]] = []
             already_members: List[str] = []
@@ -236,7 +223,6 @@ class IdentityHandlers:
                 user_id = None
                 
                 try:
-                    # Tworzymy użytkownika
                     try:
                         user_id = self.user_manager.create_user(
                             login=login,
@@ -256,7 +242,6 @@ class IdentityHandlers:
                             logger.error(f"[CreateUsersForGroup] create_user({login}) failed: {e}")
                             continue
                     
-                    # Sprawdź czy użytkownik już jest członkiem grupy
                     if user_id in existing_members:
                         already_members.append(login)
                         logger.info(
@@ -265,7 +250,6 @@ class IdentityHandlers:
                         succeeded_users.append(login)
                         continue
                     
-                    # Dodaj do grupy
                     try:
                         self.group_manager.add_member(group_id, user_id)
                         succeeded_users.append(login)
@@ -293,11 +277,9 @@ class IdentityHandlers:
                     logger.error(f"[CreateUsersForGroup] Unexpected error for {login}: {e}", exc_info=True)
                     continue
             
-            # 4. Przygotuj response zgodnie z kontraktem
             response = pb2.CreateUsersForGroupResponse()
             response.message = "Users successfully added"
             
-            # 5. Loguj detale błędów
             if failed_users:
                 failed_logins = [login for login, _ in failed_users]
                 fail_reasons = [reason for _, reason in failed_users]
@@ -328,30 +310,26 @@ class IdentityHandlers:
     
     def create_group_with_leaders(self, request, context):
         """
-        Tworzy grupę + liderów, zapisuje ich jako członków grupy
-        oraz ustawia liderów jako właścicieli (owners) tej grupy.
-
-        Używa resourceTypes (lista) do przypisania odpowiednich uprawnień RBAC
-        Dodaje suffix grupy do username liderów (matches AWS adapter format).
+        Creates group and leaders, adds leaders as group members and sets them as owners.
+        
+        Uses resourceTypes list to assign appropriate RBAC permissions.
+        Adds group suffix to leader usernames (matches AWS adapter format).
         """
         group_name: str = request.groupName
-        resource_types: List[str] = list(request.resourceTypes)  # Changed from resourceType to resourceTypes
+        resource_types: List[str] = list(request.resourceTypes)
         leaders: List[str] = list(request.leaders)
         
-        # Backend może wysłać listę, ale używamy pierwszego typu (zgodnie z AWS adapter behavior)
         resource_type: str = resource_types[0] if resource_types else ""
 
         normalized_group_name = normalize_name(group_name)
 
         try:
-            # Tworzymy grupę w Entra ID (z Resource Group)
             group_id, resource_group_name = self.group_manager.create_group(
                 name=normalized_group_name,
                 create_resource_group=True
             )
             created_leaders: List[tuple[str, str]] = []
 
-            # Assign RBAC role based on resource type
             try:
                 success, reason = self.rbac_manager.assign_role_to_group(
                     resource_type=resource_type,
@@ -379,7 +357,6 @@ class IdentityHandlers:
                     leader_login, group_name
                 )
 
-                # Tworzymy lidera
                 try:
                     leader_id = self.user_manager.create_user(
                         login=leader_login,
@@ -387,7 +364,6 @@ class IdentityHandlers:
                         group_name=group_name,
                     )
                 except Exception as e:
-                    # rollback liderów + grupy
                     for login, _uid in created_leaders:
                         try:
                             self.user_manager.delete_user(
@@ -469,13 +445,12 @@ class IdentityHandlers:
     
     def remove_group(self, request, context):
         """
-        Usuwa grupę i wszystkich jej członków (użytkowników).
-        Backend expects this method (called when group is deleted).
+        Removes group and all its members (users).
         
-        Kolejność operacji (ważne dla cleanup):
-        1. Najpierw usuwa zasoby Azure (cleanup_group_resources)
-        2. Potem usuwa użytkowników
-        3. Na końcu usuwa grupę Entra ID
+        Operation order:
+        1. Remove Azure resources (cleanup_group_resources)
+        2. Remove users
+        3. Remove Entra ID group
         """
         group_name: str = request.groupName
         normalized_group_name = normalize_name(group_name)
@@ -483,7 +458,6 @@ class IdentityHandlers:
         try:
             group = self.group_manager.get_group_by_name(normalized_group_name)
             if not group:
-                # Group doesn't exist - return success (idempotent operation)
                 response = pb2.RemoveGroupResponse()
                 response.success = True
                 response.message = f"Group '{normalized_group_name}' does not exist"
@@ -492,7 +466,6 @@ class IdentityHandlers:
             group_id = group["id"]
             removed_users = []
             
-            # KROK 0: Usuń role assignments dla grupy (PRZED wszystkim)
             logger.info(
                 f"[RemoveGroup] Step 0: Removing RBAC role assignments for group '{normalized_group_name}'..."
             )
@@ -508,18 +481,15 @@ class IdentityHandlers:
                     exc_info=True
                 )
             
-            # KROK 1: Cleanup zasobów Azure PRZED usunięciem grupy Entra
             logger.info(
                 f"[RemoveGroup] Step 1: Cleaning up Azure resources for group '{normalized_group_name}'..."
             )
             try:
-                # Znajdź zasoby po tagach
                 resources = self.resource_finder.find_resources_by_tags({"Group": normalized_group_name})
                 logger.info(
                     f"[RemoveGroup] Found {len(resources)} resources with tag Group={normalized_group_name}"
                 )
                 
-                # Usuń zasoby
                 for resource in resources:
                     try:
                         result_msg = self.resource_deleter.delete_resource(resource)
@@ -530,7 +500,6 @@ class IdentityHandlers:
                             exc_info=True
                         )
                 
-                # Fallback: spróbuj usunąć Resource Group jeśli nie znaleziono zasobów po tagach
                 if not resources:
                     resource_group_name = f"rg-{normalized_group_name}"
                     logger.info(
@@ -552,7 +521,6 @@ class IdentityHandlers:
                                     f"[RemoveGroup] Successfully deleted Resource Group '{resource_group_name}'"
                                 )
                         except Exception:
-                            # RG nie istnieje - to OK
                             logger.info(
                                 f"[RemoveGroup] Resource Group '{resource_group_name}' does not exist"
                             )
@@ -571,19 +539,15 @@ class IdentityHandlers:
                     f"Continuing with user and group deletion...",
                     exc_info=True
                 )
-                # Nie przerywamy - kontynuujemy z usuwaniem użytkowników i grupy
             
-            # KROK 2: Usuń role assignments dla każdego użytkownika (PRZED usunięciem użytkownika)
             logger.info(
                 f"[RemoveGroup] Step 2: Removing RBAC role assignments for users in group '{normalized_group_name}'..."
             )
             
-            # Próba 1: Pobierz użytkowników przez list_user_members (z retry dla replikacji)
-            # Używamy list_user_members zamiast list_members aby uzyskać tylko użytkowników
             user_members = []
             primary_endpoint_count = 0
             import time
-            for attempt in range(1, 4):  # 3 próby z opóźnieniem
+            for attempt in range(1, 4):
                 try:
                     user_members = self.group_manager.list_user_members(group_id)
                     primary_endpoint_count = len(user_members)
@@ -594,7 +558,7 @@ class IdentityHandlers:
                         )
                         break
                     if attempt < 3:
-                        delay = 2.0 * attempt  # 2s, 4s
+                        delay = 2.0 * attempt
                         logger.info(
                             f"[RemoveGroup] Primary endpoint returned 0 users (attempt {attempt}/3). "
                             f"Waiting {delay}s for Azure AD replication..."
@@ -613,7 +577,6 @@ class IdentityHandlers:
                 f"in group '{normalized_group_name}' (group_id: {group_id})"
             )
             
-            # Debug: loguj szczegóły użytkowników
             for idx, user in enumerate(user_members):
                 logger.info(
                     f"[RemoveGroup] User {idx+1}: id={user.get('id')}, "
@@ -622,24 +585,17 @@ class IdentityHandlers:
             
             user_ids_to_remove = []
             
-            # Jeśli list_user_members nie zwróciło użytkowników, spróbuj znaleźć użytkowników po UPN (fallback)
-            # To rozwiązanie jest inspirowane AWS adapterem, który taguje użytkowników przy tworzeniu.
-            # Azure AD nie ma tagów, więc używamy UPN pattern: {user}-{group}@{domain}
             upn_search_count = 0
             if not user_members:
                 logger.warning(
                     f"[RemoveGroup] Step 2.2: Primary endpoint returned 0 members (Azure AD replication delay). "
                     f"Trying fallback: search users by UPN pattern containing '{normalized_group_name}'..."
                 )
-                # Fallback: znajdź użytkowników po UPN zawierającym nazwę grupy
-                # Format UPN: {user}-{normalized_group}@{domain}
                 try:
                     from config.settings import AZURE_UDOMAIN
                     from azure_clients import get_graph_client
                     graph_client = get_graph_client()
                     
-                    # Graph API filter: szukamy użytkowników gdzie UPN kończy się na "-{group}@{domain}"
-                    # Używamy endswith zamiast contains dla lepszej wydajności
                     filter_pattern = f"-{normalized_group_name}@{AZURE_UDOMAIN}"
                     # Graph API wymaga URL encoding dla filtrów
                     import urllib.parse
@@ -687,7 +643,6 @@ class IdentityHandlers:
                 f"(primary endpoint: {primary_endpoint_count}, UPN search: {upn_search_count})"
             )
             
-            # Warning jeśli primary endpoint zwrócił 0, ale UPN search znalazł użytkowników
             if primary_endpoint_count == 0 and upn_search_count > 0:
                 logger.warning(
                     f"[RemoveGroup] WARNING: Primary endpoint (list_user_members) returned 0 users, "
@@ -695,7 +650,6 @@ class IdentityHandlers:
                     f"This may indicate an issue with Graph API /members endpoint or Azure AD replication delays."
                 )
             
-            # Przetwórz wszystkich znalezionych użytkowników
             for user in user_members:
                 user_id = user.get("id")
                 user_principal_name = user.get("userPrincipalName", "")
@@ -711,7 +665,6 @@ class IdentityHandlers:
                         f"[RemoveGroup] User member missing 'userPrincipalName' (id: {user_id}). "
                         f"Trying to get UPN from Graph API..."
                     )
-                    # Spróbuj pobrać UPN z Graph API
                     try:
                         from azure_clients import get_graph_client
                         graph_client = get_graph_client()
@@ -740,7 +693,6 @@ class IdentityHandlers:
                             f"Continuing with user deletion...",
                             exc_info=True
                         )
-                        # Dodaj użytkownika do listy do usunięcia mimo błędu
                         user_ids_to_remove.append((user_id, user_principal_name))
                 else:
                     logger.warning(
@@ -748,32 +700,27 @@ class IdentityHandlers:
                         f"id={user_id}, userPrincipalName={user_principal_name}"
                     )
             
-            # KROK 3: Usuń użytkowników z grupy i usuń użytkowników
             logger.info(
                 f"[RemoveGroup] Step 3: Removing users from group and deleting users for group '{normalized_group_name}'..."
             )
             for user_id, user_principal_name in user_ids_to_remove:
                 try:
-                    # Remove from group first (idempotent - 404 is OK)
                     try:
                         self.group_manager.remove_member(group_id, user_id)
                     except Exception as e:
-                        # Ignore errors when removing from group (user might already be removed)
                         logger.debug(
                             f"[RemoveGroup] Error removing user {user_principal_name} from group (may already be removed): {e}"
                         )
                     
-                    # Delete user with retry (Azure AD replication)
                     import time
                     user_deleted = False
-                    for delete_attempt in range(1, 4):  # 3 próby
+                    for delete_attempt in range(1, 4):
                         try:
                             self.user_manager.delete_user(user_principal_name)
                             user_deleted = True
                             break
                         except Exception as e:
                             error_msg = str(e).lower()
-                            # 404 means user already deleted - success
                             if "404" in error_msg or "not found" in error_msg:
                                 user_deleted = True
                                 logger.info(
@@ -781,7 +728,7 @@ class IdentityHandlers:
                                 )
                                 break
                             if delete_attempt < 3:
-                                delay = 2.0 * delete_attempt  # 2s, 4s
+                                delay = 2.0 * delete_attempt
                                 logger.warning(
                                     f"[RemoveGroup] Error deleting user {user_principal_name} (attempt {delete_attempt}/3): {e}. "
                                     f"Retrying in {delay}s..."
@@ -805,7 +752,6 @@ class IdentityHandlers:
                         exc_info=True
                     )
             
-            # KROK 4: Delete the group (na końcu, po zasobach, role assignments i użytkownikach)
             logger.info(
                 f"[RemoveGroup] Step 4: Deleting Entra ID group '{normalized_group_name}'..."
             )
@@ -853,7 +799,6 @@ class IdentityHandlers:
                 context.set_details("Either groupName or userName must be provided")
                 return pb2.AssignPoliciesResponse(success=False, message="Either groupName or userName must be provided")
             
-            # Walidacja: sprawdź czy wszystkie resource_types są w RESOURCE_TYPE_ROLES
             available_types = set(self.rbac_manager.RESOURCE_TYPE_ROLES.keys())
             invalid_types = [rt for rt in resource_types if rt not in available_types]
             
@@ -868,23 +813,18 @@ class IdentityHandlers:
                 context.set_details(error_msg)
                 return pb2.AssignPoliciesResponse(success=False, message=error_msg)
             
-            # Usuń duplikaty zachowując kolejność (prosta deduplikacja)
             deduplicated_types = []
             for rt in resource_types:
                 if rt not in deduplicated_types:
                     deduplicated_types.append(rt)
             
-            # Deterministyczna kolejność: network → storage → vm
-            # Użyj kolejności z RESOURCE_TYPE_ORDER jeśli zdefiniowana, w przeciwnym razie użyj domyślnej
             ordered_types = []
             resource_type_order = getattr(self.rbac_manager, 'RESOURCE_TYPE_ORDER', ['network', 'storage', 'vm'])
             
-            # Najpierw typy w określonej kolejności
             for rt in resource_type_order:
                 if rt in deduplicated_types:
                     ordered_types.append(rt)
             
-            # Potem pozostałe typy w oryginalnej kolejności
             for rt in deduplicated_types:
                 if rt not in ordered_types:
                     ordered_types.append(rt)
@@ -894,7 +834,6 @@ class IdentityHandlers:
                 f"(original: {resource_types}, deduplicated: {deduplicated_types})"
             )
             
-            # Assign RBAC roles for each resource type
             assigned_roles = []
             failed_assignments = []
             
@@ -909,7 +848,6 @@ class IdentityHandlers:
                             failed_assignments.append(f"{resource_type}: {error_msg}")
                             continue
                         
-                        # Pełny kontekst dla logowania
                         scope = f"/subscriptions/{self.rbac_manager._subscription_id}"
                         logger.info(
                             f"[AssignPolicies] Assigning role for resource_type='{resource_type}' "
@@ -936,8 +874,6 @@ class IdentityHandlers:
                             logger.warning(f"[AssignPolicies] {error_msg}")
                             failed_assignments.append(f"{resource_type}: {reason}")
                     
-                    # Note: User-level policy assignment not implemented yet
-                    # Azure RBAC typically uses group-based assignments
                     if user_name:
                         logger.warning(f"[AssignPolicies] User-level policy assignment not yet implemented for '{user_name}'")
                         failed_assignments.append(f"{resource_type}: User-level assignment not implemented")
@@ -973,22 +909,19 @@ class IdentityHandlers:
     
     def update_group_leaders(self, request, context):
         """
-        Synchronizuje liderów dla istniejącej grupy.
-        Wykonuje pełną synchronizację: usuwa starych liderów, dodaje nowych.
+        Synchronizes leaders for existing group.
         
-        Uwaga: Używa CreateGroupWithLeadersRequest/Response tymczasowo.
-        W przyszłości powinien być dedykowany UpdateGroupLeadersRequest/Response w protobuf.
+        Performs full sync: removes old leaders, adds new ones.
+        Currently uses CreateGroupWithLeadersRequest/Response from protobuf.
         """
         group_name: str = request.groupName
         resource_types: List[str] = list(request.resourceTypes)
         new_leaders: List[str] = list(request.leaders)
         
-        # Używamy pierwszego resource_type (zgodnie z AWS adapter behavior)
         resource_type: str = resource_types[0] if resource_types else ""
         normalized_group_name = normalize_name(group_name)
         
         try:
-            # Sprawdź czy grupa istnieje
             group = self.group_manager.get_group_by_name(normalized_group_name)
             if not group:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
@@ -997,30 +930,24 @@ class IdentityHandlers:
             
             group_id = group["id"]
             
-            # KROK 1: Pobierz aktualną listę liderów (owners)
             current_owner_ids = self.group_manager.list_owners(group_id)
             logger.info(
                 f"[UpdateGroupLeaders] Current owners for group '{normalized_group_name}': {len(current_owner_ids)}"
             )
             
-            # Mapuj current_owner_ids do loginów (potrzebujemy do porównania)
-            # Pobierz dane użytkowników żeby znaleźć ich loginy
             current_leader_logins = set()
             owner_id_to_login = {}
             
             for owner_id in current_owner_ids:
                 try:
-                    # Pobierz dane użytkownika z Graph API
                     from msgraph.core import GraphClient
                     from azure_clients import get_graph_client
                     graph = get_graph_client()
                     resp = graph.get(f"/users/{owner_id}")
                     if resp.status_code == 200:
                         user_data = resp.json()
-                        # Usuń suffix grupy z username jeśli istnieje
                         upn = user_data.get("userPrincipalName", "")
                         login = upn.split("@")[0] if "@" in upn else upn
-                        # Usuń suffix "-{group_name}" jeśli istnieje
                         if login.endswith(f"-{normalized_group_name}"):
                             login = login[:-(len(normalized_group_name) + 1)]
                         current_leader_logins.add(login)

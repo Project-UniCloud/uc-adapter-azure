@@ -1,8 +1,7 @@
 # identity/rbac_manager.py
 
 """
-Zarządzanie przypisaniami ról RBAC w Azure na podstawie typu zasobu.
-To jest odpowiednik polityk IAM z adaptera AWS – ale w świecie Azure RBAC.
+Azure RBAC role assignment management based on resource type.
 """
 
 import logging
@@ -18,21 +17,14 @@ from config.settings import AZURE_SUBSCRIPTION_ID
 
 
 class AzureRBACManager:
-    """
-    Klasa odpowiedzialna za przypisywanie ról RBAC do grup w Azure
-    na podstawie typu zasobu (np. "vm", "storage").
-    """
+    """Manages Azure RBAC role assignments for groups based on resource types."""
 
-    # Mapowanie typu zasobu na nazwę wbudowanej roli RBAC
     RESOURCE_TYPE_ROLES = {
         "vm": "Virtual Machine Contributor",
         "storage": "Storage Account Contributor",
         "network": "Network Contributor",
-        # W razie potrzeby można dodać kolejne typy
     }
     
-    # Deterministyczna kolejność przypisywania ról (dla compose policy)
-    # Kolejność: network → storage → vm (zależności i stabilność)
     RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]
 
     def __init__(self, credential=None, subscription_id: Optional[str] = None) -> None:
@@ -43,12 +35,9 @@ class AzureRBACManager:
 
     def _get_role_definition_id(self, role_name: str) -> Optional[str]:
         """
-        Zwraca pełne ID definicji roli (roleDefinitionId) dla podanej nazwy roli.
-
-        Szuka roli na scope:
-            /subscriptions/{subscriptionId}
-
-        Jeśli nie znajdzie albo wystąpi błąd – zwraca None.
+        Returns role definition ID for the given role name.
+        
+        Searches at subscription scope. Returns None if not found or on error.
         """
         try:
             role_definitions = self._auth_client.role_definitions.list(
@@ -68,15 +57,9 @@ class AzureRBACManager:
         role_definition_id: str,
     ) -> Optional[object]:
         """
-        Sprawdza czy role assignment już istnieje dla danego principal i roli.
+        Checks if a role assignment already exists for the given principal and role.
         
-        Args:
-            scope: Scope przypisania (np. "/subscriptions/{id}")
-            principal_id: objectId principal (grupy lub użytkownika)
-            role_definition_id: Pełne ID definicji roli
-        
-        Returns:
-            RoleAssignment object jeśli istnieje, None w przeciwnym razie
+        Returns RoleAssignment object if found, None otherwise.
         """
         try:
             assignments = self._auth_client.role_assignments.list_for_scope(scope=scope)
@@ -104,14 +87,9 @@ class AzureRBACManager:
         assignment_name: str,
     ) -> bool:
         """
-        Weryfikuje czy role assignment istnieje po utworzeniu.
+        Verifies that a role assignment exists after creation.
         
-        Args:
-            scope: Scope przypisania
-            assignment_name: Nazwa (ID) przypisania roli
-        
-        Returns:
-            True jeśli assignment istnieje, False w przeciwnym razie
+        Returns True if found, False otherwise. Treats 404 as not found.
         """
         try:
             assignment = self._auth_client.role_assignments.get(
@@ -126,14 +104,12 @@ class AzureRBACManager:
                 return True
             return False
         except Exception as e:
-            # 404 oznacza że assignment nie istnieje
             if "404" in str(e) or "NotFound" in str(e):
                 logging.warning(
                     f"[_verify_role_assignment_exists] Assignment not found after creation: "
                     f"name={assignment_name}, scope={scope}"
                 )
                 return False
-            # Inne błędy - loguj i zwróć False
             logging.warning(
                 f"[_verify_role_assignment_exists] Error verifying assignment: {e}"
             )
@@ -146,22 +122,16 @@ class AzureRBACManager:
         scope: Optional[str] = None,
     ) -> tuple[bool, str]:
         """
-        Przypisuje rolę RBAC do grupy na podstawie typu zasobu.
-
+        Assigns RBAC role to a group based on resource type.
+        
         Args:
-            resource_type: typ zasobu (np. "vm", "storage", "network")
-            group_id: objectId grupy w Entra ID
-            scope: scope przypisania – domyślnie cała subskrypcja
-                   (np. "/subscriptions/...").
-                   Można zawęzić do resource group:
-                   "/subscriptions/.../resourceGroups/<RG_NAME>"
-
+            resource_type: Resource type (e.g., "vm", "storage", "network")
+            group_id: Entra ID group object ID
+            scope: Assignment scope (defaults to subscription level)
+        
         Returns:
-            Tuple (success: bool, reason: str):
-            - (True, "") – jeśli przypisanie się udało
-            - (False, reason) – jeśli pominięto lub nie powiodło się, z opisem powodu
+            Tuple (success: bool, reason: str). Returns (True, "") on success.
         """
-        # Walidacja resource_type z lepszym komunikatem błędu
         if resource_type not in self.RESOURCE_TYPE_ROLES:
             available_types = ", ".join(sorted(self.RESOURCE_TYPE_ROLES.keys()))
             reason = (
@@ -188,7 +158,6 @@ class AzureRBACManager:
         if scope is None:
             scope = f"/subscriptions/{self._subscription_id}"
         
-        # Walidacja scope - musi używać HTTPS format
         try:
             _validate_scope(scope)
         except ValueError as e:
@@ -196,7 +165,6 @@ class AzureRBACManager:
             logging.error(f"[assign_role_to_group] {reason}")
             return False, reason
 
-        # KROK 1: Sprawdź czy assignment już istnieje (idempotency)
         existing_assignment = self._find_existing_role_assignment(
             scope=scope,
             principal_id=group_id,
@@ -211,8 +179,6 @@ class AzureRBACManager:
             )
             return True, ""
         
-        # KROK 2: Utwórz nowy assignment (PUT)
-        # Parametry przypisania roli – principalType=Group, bo podajemy objectId grupy
         role_assignment_params = RoleAssignmentCreateParameters(
             role_definition_id=role_definition_id,
             principal_id=group_id,
@@ -226,7 +192,6 @@ class AzureRBACManager:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                # Unikalna nazwa przypisania roli (wymagane przez API)
                 assignment_name = str(uuid.uuid4())
                 
                 logging.info(
@@ -241,7 +206,6 @@ class AzureRBACManager:
                     parameters=role_assignment_params,
                 )
                 
-                # KROK 3: Verify - sprawdź czy assignment rzeczywiście istnieje
                 verified = self._verify_role_assignment_exists(scope, assignment_name)
                 
                 if verified:
@@ -253,24 +217,20 @@ class AzureRBACManager:
                     )
                     return True, ""
                 else:
-                    # Assignment utworzony, ale weryfikacja nie powiodła się - może być opóźnienie propagacji
                     logging.warning(
                         f"[assign_role_to_group] Assignment created but verification failed. "
                         f"This may be due to propagation delay. assignment_name={assignment_name}, scope={scope}"
                     )
-                    # Spróbuj jeszcze raz po krótkim opóźnieniu
                     if attempt < max_attempts:
                         time.sleep(2.0)
                         continue
                     else:
-                        # Ostatnia próba - zwróć partial success (assignment utworzony, ale nie zweryfikowany)
                         return True, "Assignment created but verification failed (may be propagation delay)"
 
             except Exception as e:
                 msg = str(e)
                 last_exception = e
 
-                # Obsługa "RoleAssignmentExists" jako success (idempotent)
                 if ("RoleAssignmentExists" in msg or 
                     "already exists" in msg.lower() or 
                     "Conflict" in msg):
@@ -281,8 +241,6 @@ class AzureRBACManager:
                     )
                     return True, ""
 
-                # Typowy przypadek tuż po utworzeniu grupy:
-                # PrincipalNotFound – katalog jeszcze nie „zna” objectId
                 if "PrincipalNotFound" in msg and attempt < max_attempts:
                     logging.warning(
                         f"[assign_role_to_group] PrincipalNotFound for group {group_id} "
@@ -292,7 +250,6 @@ class AzureRBACManager:
                     time.sleep(delay_seconds)
                     continue
 
-                # Inne błędy - loguj szczegóły
                 reason = (
                     f"Exception during role assignment (attempt {attempt}/{max_attempts}): {msg}. "
                     f"scope={scope}, principal_id={group_id}, role_definition_id={role_definition_id}, "
@@ -300,11 +257,8 @@ class AzureRBACManager:
                 )
                 logging.error(f"[assign_role_to_group] {reason}")
                 
-                # Jeśli to ostatnia próba, zwróć błąd
                 if attempt >= max_attempts:
                     return False, reason
-
-        # Nie udało się nawet po retry
         last_error = str(last_exception) if last_exception else "Unknown error"
         reason = (
             f"Failed to assign role '{role_name}' to group {group_id} "
@@ -321,19 +275,13 @@ class AzureRBACManager:
         scope: Optional[str] = None,
     ) -> int:
         """
-        Usuwa wszystkie role assignments dla grupy.
+        Removes all role assignments for a group.
         
-        Args:
-            group_id: objectId grupy w Entra ID
-            scope: scope przypisania – domyślnie cała subskrypcja
-        
-        Returns:
-            Liczba usuniętych assignments
+        Returns count of removed assignments.
         """
         if scope is None:
             scope = f"/subscriptions/{self._subscription_id}"
         
-        # Walidacja scope
         try:
             _validate_scope(scope)
         except ValueError as e:
@@ -345,16 +293,12 @@ class AzureRBACManager:
         initial_delay = 2.0
         
         try:
-            # Listuj wszystkie role assignments na danym scope
             assignments = self._auth_client.role_assignments.list_for_scope(scope=scope)
             
             for assignment in assignments:
-                # Sprawdź czy assignment jest dla tej grupy
                 if assignment.principal_id == group_id and assignment.principal_type == "Group":
-                    # Retry z exponential backoff dla usuwania
                     for attempt in range(1, max_attempts + 1):
                         try:
-                            # Usuń assignment
                             self._auth_client.role_assignments.delete(
                                 scope=scope,
                                 role_assignment_name=assignment.name
@@ -377,10 +321,9 @@ class AzureRBACManager:
                                     f"[remove_role_assignments_for_group] Assignment already removed "
                                     f"(idempotent success). name={assignment.name}, group_id={group_id}"
                                 )
-                                removed_count += 1  # Licz jako usunięte
+                                removed_count += 1
                                 break
                             
-                            # Retry dla 429/5xx
                             if (status_code in (429, 500, 502, 503, 504) and attempt < max_attempts):
                                 delay = min(initial_delay * (2 ** (attempt - 1)), 10.0)
                                 logging.warning(
@@ -418,19 +361,13 @@ class AzureRBACManager:
         scope: Optional[str] = None,
     ) -> int:
         """
-        Usuwa wszystkie role assignments dla użytkownika (np. starego lidera).
+        Removes all role assignments for a user.
         
-        Args:
-            user_id: objectId użytkownika w Entra ID
-            scope: scope przypisania – domyślnie cała subskrypcja
-        
-        Returns:
-            Liczba usuniętych assignments
+        Returns count of removed assignments.
         """
         if scope is None:
             scope = f"/subscriptions/{self._subscription_id}"
         
-        # Walidacja scope
         try:
             _validate_scope(scope)
         except ValueError as e:
@@ -442,16 +379,12 @@ class AzureRBACManager:
         initial_delay = 2.0
         
         try:
-            # Listuj wszystkie role assignments na danym scope
             assignments = self._auth_client.role_assignments.list_for_scope(scope=scope)
             
             for assignment in assignments:
-                # Sprawdź czy assignment jest dla tego użytkownika
                 if assignment.principal_id == user_id and assignment.principal_type == "User":
-                    # Retry z exponential backoff dla usuwania
                     for attempt in range(1, max_attempts + 1):
                         try:
-                            # Usuń assignment
                             self._auth_client.role_assignments.delete(
                                 scope=scope,
                                 role_assignment_name=assignment.name
@@ -474,10 +407,9 @@ class AzureRBACManager:
                                     f"[remove_role_assignments_for_user] Assignment already removed "
                                     f"(idempotent success). name={assignment.name}, user_id={user_id}"
                                 )
-                                removed_count += 1  # Licz jako usunięte
+                                removed_count += 1
                                 break
                             
-                            # Retry dla 429/5xx
                             if (status_code in (429, 500, 502, 503, 504) and attempt < max_attempts):
                                 delay = min(initial_delay * (2 ** (attempt - 1)), 10.0)
                                 logging.warning(

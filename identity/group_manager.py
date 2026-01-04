@@ -1,12 +1,7 @@
 # identity/group_manager.py
 
 """
-Zarządzanie grupami w Microsoft Entra ID (Azure AD) z użyciem Microsoft Graph.
-
-To jest odpowiednik AWS-owego IAM GroupManager:
-- tworzenie grup
-- dodawanie / usuwanie członków
-- pobieranie informacji o grupie
+Group management in Microsoft Entra ID using Microsoft Graph API.
 """
 
 import time
@@ -32,8 +27,6 @@ class AzureGroupManager:
     def __init__(self, graph_client: Optional[GraphClient] = None) -> None:
         self._graph = graph_client or get_graph_client()
 
-    # ========= OPERACJE PODSTAWOWE =========
-
     def create_group(
         self, 
         name: str, 
@@ -41,27 +34,18 @@ class AzureGroupManager:
         create_resource_group: bool = True
     ) -> Tuple[str, Optional[str]]:
         """
-        Tworzy nową grupę bezpieczeństwa (security group) w Entra ID.
-        Normalizuje nazwę grupy (spaces → dashes) dla zgodności z AWS adapterem.
+        Creates a security group in Entra ID.
         
-        Opcjonalnie tworzy również Resource Group w Azure dla tej grupy (fallback cleanup).
-
-        Args:
-            name: Nazwa grupy
-            description: Opcjonalny opis grupy
-            create_resource_group: Czy utworzyć Resource Group dla grupy (domyślnie True)
-
-        Zwraca:
-            Tuple (group_id: str, resource_group_name: Optional[str]):
-            - group_id: id grupy (GUID), którego używamy dalej np. w add_member
-            - resource_group_name: nazwa utworzonej Resource Group lub None
+        Normalizes group name (spaces → dashes) for AWS adapter compatibility.
+        Optionally creates Azure Resource Group for fallback cleanup.
+        
+        Returns tuple (group_id, resource_group_name).
         """
-        # Normalize group name (matches AWS adapter behavior)
         normalized_name = normalize_name(name)
 
         body = {
             "displayName": normalized_name,
-            "mailEnabled": False,  # klasyczna security group, bez skrzynki pocztowej
+            "mailEnabled": False,
             "mailNickname": normalized_name.replace(" ", "-").lower(),
             "securityEnabled": True,
         }
@@ -74,7 +58,6 @@ class AzureGroupManager:
         data = resp.json()
         group_id = data["id"]
         
-        # Utwórz Resource Group dla grupy (fallback cleanup)
         resource_group_name = None
         if create_resource_group:
             try:
@@ -93,19 +76,14 @@ class AzureGroupManager:
     
     def _create_resource_group_for_group(self, normalized_group_name: str) -> Optional[str]:
         """
-        Tworzy Resource Group dla grupy o nazwie rg-{normalized_group_name} z tagiem Group.
+        Creates Resource Group named rg-{normalized_group_name} with Group tag.
         
-        Args:
-            normalized_group_name: Znormalizowana nazwa grupy
-        
-        Returns:
-            Nazwa utworzonej Resource Group lub None w przypadku błędu
+        Returns Resource Group name or None on error.
         """
         try:
             resource_client = get_resource_client()
             resource_group_name = f"rg-{normalized_group_name}"
             
-            # Sprawdź czy RG już istnieje
             try:
                 existing_rg = resource_client.resource_groups.get(resource_group_name)
                 if existing_rg:
@@ -115,14 +93,12 @@ class AzureGroupManager:
                     )
                     return resource_group_name
             except Exception:
-                # RG nie istnieje - utworzymy nowy
                 pass
             
-            # Utwórz nowy Resource Group z tagiem Group
             tags = {"Group": normalized_group_name}
             resource_client.resource_groups.create_or_update(
                 resource_group_name,
-                {"location": "westeurope", "tags": tags}  # Domyślna lokalizacja
+                {"location": "westeurope", "tags": tags}
             )
             
             logger.info(
@@ -139,17 +115,13 @@ class AzureGroupManager:
             return None
 
     def delete_group(self, group_id: str) -> None:
-        """
-        Usuwa grupę po id. 404 traktujemy jako OK.
-        """
+        """Deletes group by id. Treats 404 (not found) as success."""
         resp = self._graph.delete(f"/groups/{group_id}")
         if resp.status_code not in (204, 404):
             resp.raise_for_status()
 
     def get_group_by_id(self, group_id: str) -> Optional[Dict]:
-        """
-        Zwraca słownik z danymi grupy o podanym id lub None, jeśli nie istnieje.
-        """
+        """Returns group data as dict, or None if group doesn't exist."""
         resp = self._graph.get(f"/groups/{group_id}")
         if resp.status_code == 404:
             return None
@@ -158,12 +130,11 @@ class AzureGroupManager:
 
     def get_group_by_name(self, name: str) -> Optional[Dict]:
         """
-        Wyszukuje grupę po displayName.
-        Normalizuje nazwę przed wyszukiwaniem (spaces → dashes).
-        Jeśli znajdzie dokładnie jedną – zwraca jej dane.
-        Jeśli brak grup / więcej niż jedna – zwraca None.
+        Finds group by displayName.
+        
+        Normalizes name before searching. Returns group data if exactly one found,
+        None if zero or multiple matches.
         """
-        # Normalize group name before searching (matches AWS adapter behavior)
         normalized_name = normalize_name(name)
         params = {
             "$filter": f"displayName eq '{normalized_name}'",
@@ -174,11 +145,7 @@ class AzureGroupManager:
 
         if len(items) == 1:
             return items[0]
-
-        # Brak lub więcej niż jedna – dla przejrzystości raportujemy None
         return None
-
-    # ========= CZŁONKOSTWO =========
 
     def add_member(
         self,
@@ -188,18 +155,10 @@ class AzureGroupManager:
         initial_delay: float = 3.0,
     ) -> None:
         """
-        Dodaje użytkownika do grupy z ulepszonym mechanizmem retry:
-        - Obsługuje 404 (replikacja katalogu), 429 (rate limit), 5xx (błędy serwera)
-        - Używa exponential backoff z maksymalnym delay 30s
-
-        Implementacja zgodna z API Graph:
-        POST /groups/{group_id}/members/$ref
-        body: { "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/{user_id}" }
-
-        :param group_id: GUID grupy
-        :param user_id: GUID użytkownika (taki, jaki zwraca AzureUserManager.create_user)
-        :param retries: ile razy ponawiać próbę
-        :param initial_delay: początkowe opóźnienie (w sekundach) - będzie rosło wykładniczo
+        Adds user to group with retry mechanism.
+        
+        Handles 404 (replication), 429 (rate limit), 5xx (server errors).
+        Uses exponential backoff with max delay 30s.
         """
         ref = {
             "@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{user_id}"
@@ -221,12 +180,10 @@ class AzureGroupManager:
                     )
                 return
 
-            # Retry dla: 404 (replikacja), 429 (rate limit), 5xx (błędy serwera)
             if status in (404, 429) or (500 <= status < 600):
                 last_resp = resp
                 last_status = status
                 
-                # Exponential backoff: delay = initial_delay * (2^(attempt-1)), max 30s
                 delay = min(initial_delay * (2 ** (attempt - 1)), 30.0)
                 
                 error_type = {
@@ -251,7 +208,6 @@ class AzureGroupManager:
                 resp.raise_for_status()
                 return
 
-        # Po wszystkich próbach nadal błąd – logujemy szczegóły i wywalamy wyjątek
         if last_resp is not None:
             logger.error(
                 f"[add_member] FAILED po {retries} próbach. "
@@ -271,17 +227,10 @@ class AzureGroupManager:
         initial_delay: float = 3.0,
     ) -> None:
         """
-        Dodaje właściciela (owner) do grupy z ulepszonym mechanizmem retry:
-        - Obsługuje 404 (replikacja katalogu), 429 (rate limit), 5xx (błędy serwera)
-        - Używa exponential backoff z maksymalnym delay 30s
-
-        POST /groups/{group_id}/owners/$ref
-        body: { "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/{user_id}" }
+        Adds owner to group with retry mechanism.
         
-        :param group_id: GUID grupy
-        :param user_id: GUID użytkownika
-        :param retries: ile razy ponawiać próbę
-        :param initial_delay: początkowe opóźnienie (w sekundach) - będzie rosło wykładniczo
+        Handles 404 (replication), 429 (rate limit), 5xx (server errors).
+        Uses exponential backoff with max delay 30s.
         """
         ref = {
             "@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{user_id}"
@@ -303,12 +252,10 @@ class AzureGroupManager:
                     )
                 return
 
-            # Retry dla: 404 (replikacja), 429 (rate limit), 5xx (błędy serwera)
             if status in (404, 429) or (500 <= status < 600):
                 last_resp = resp
                 last_status = status
                 
-                # Exponential backoff: delay = initial_delay * (2^(attempt-1)), max 30s
                 delay = min(initial_delay * (2 ** (attempt - 1)), 30.0)
                 
                 error_type = {
@@ -325,7 +272,6 @@ class AzureGroupManager:
                     time.sleep(delay)
                     continue
             else:
-                # Inne błędy (np. 400, 403) - nie retry, od razu błąd
                 logger.error(
                     f"[add_owner] ERROR adding owner: status={status}, "
                     f"group_id={group_id}, user_id={user_id}, body={resp.text}"
@@ -345,26 +291,19 @@ class AzureGroupManager:
             last_resp.raise_for_status()
 
     def remove_member(self, group_id: str, user_id: str) -> None:
-        """
-        Usuwa użytkownika z grupy.
-
-        DELETE /groups/{group_id}/members/{user_id}/$ref
-        """
+        """Removes user from group. Treats 404 (not found) as success."""
         resp = self._graph.delete(f"/groups/{group_id}/members/{user_id}/$ref")
         if resp.status_code not in (204, 404):
-            # 204 – usunięto, 404 – już go tam nie było
             resp.raise_for_status()
 
     def list_members(self, group_id: str) -> List[Dict]:
         """
-        Zwraca listę członków grupy (każdy element to dict z danymi directoryObject).
-
-        Uwaga: dla dużych grup trzeba by dodać obsługę @odata.nextLink.
+        Returns list of group members (each element is dict with directoryObject data).
+        
+        Note: pagination (@odata.nextLink) not implemented for large groups.
         """
         members: List[Dict] = []
 
-        # Użyj $select aby uzyskać potrzebne pola (id, userPrincipalName)
-        # Uwaga: @odata.type jest automatycznie zwracane przez Graph API, nie może być w $select
         params = {
             "$select": "id,userPrincipalName"
         }
@@ -377,20 +316,18 @@ class AzureGroupManager:
     
     def list_user_members(self, group_id: str) -> List[Dict]:
         """
-        Zwraca listę tylko użytkowników (User) w grupie, pomijając inne typy obiektów.
+        Returns list of User members only, filtering out other object types.
         
-        Używa /groups/{group_id}/members z filtrowaniem lub fallback do /members/microsoft.graph.user.
+        Uses /groups/{group_id}/members with filtering, or fallback to
+        /members/microsoft.graph.user endpoint.
         """
         user_members: List[Dict] = []
         
         try:
-            # Próba 1: Pobierz wszystkich członków i filtruj (najbardziej niezawodne)
-            # Uwaga: @odata.type jest automatycznie zwracane przez Graph API, nie może być w $select
             params = {
                 "$select": "id,userPrincipalName"
             }
             
-            # Obsługa paginacji: Graph API może zwracać @odata.nextLink
             all_members = []
             endpoint_path = f"/groups/{group_id}/members"
             
@@ -401,14 +338,11 @@ class AzureGroupManager:
                 page_members = data.get("value", [])
                 all_members.extend(page_members)
                 
-                # Sprawdź czy jest następna strona
                 next_link = data.get("@odata.nextLink")
                 if next_link:
                     logger.debug(f"[list_user_members] Pagination: Retrieved {len(page_members)} members, more pages available")
-                    # @odata.nextLink zawiera pełny URL, wyciągnij tylko ścieżkę względną
                     if next_link.startswith("https://graph.microsoft.com/v1.0"):
                         endpoint_path = next_link.replace("https://graph.microsoft.com/v1.0", "")
-                        # Parametry są już w URL, nie podawaj params
                         params = None
                     else:
                         endpoint_path = None
@@ -417,12 +351,9 @@ class AzureGroupManager:
             
             logger.debug(f"[list_user_members] Retrieved {len(all_members)} total members from group {group_id}")
             
-            # Filtruj tylko użytkowników
             for member in all_members:
                 odata_type = member.get("@odata.type", "")
-                # Graph API zwraca "#microsoft.graph.user" dla użytkowników
                 if "#microsoft.graph.user" in odata_type:
-                    # Upewnij się, że mamy id i userPrincipalName
                     user_id = member.get("id")
                     upn = member.get("userPrincipalName", "")
                     if user_id:
@@ -439,13 +370,11 @@ class AzureGroupManager:
                 f"Trying alternative endpoint...",
                 exc_info=True
             )
-            # Fallback: spróbuj bezpośredniego endpointu (może nie działać w niektórych wersjach Graph API)
             try:
                 params = {
                     "$select": "id,userPrincipalName"
                 }
                 
-                # Obsługa paginacji dla fallback endpointu
                 fallback_users = []
                 endpoint_path = f"/groups/{group_id}/members/microsoft.graph.user"
                 
@@ -456,13 +385,12 @@ class AzureGroupManager:
                     page_users = data.get("value", [])
                     fallback_users.extend(page_users)
                     
-                    # Sprawdź czy jest następna strona
                     next_link = data.get("@odata.nextLink")
                     if next_link:
                         logger.debug(f"[list_user_members] Fallback pagination: Retrieved {len(page_users)} users, more pages available")
                         if next_link.startswith("https://graph.microsoft.com/v1.0"):
                             endpoint_path = next_link.replace("https://graph.microsoft.com/v1.0", "")
-                            params = None  # Parametry są już w URL
+                            params = None
                         else:
                             endpoint_path = None
                     else:
@@ -479,15 +407,7 @@ class AzureGroupManager:
         return user_members
     
     def list_owners(self, group_id: str) -> List[str]:
-        """
-        Zwraca listę user_id właścicieli (owners) grupy.
-        
-        Args:
-            group_id: GUID grupy
-        
-        Returns:
-            Lista user_id (GUID) właścicieli grupy
-        """
+        """Returns list of user IDs (GUIDs) of group owners."""
         owners: List[str] = []
         
         try:
@@ -508,21 +428,11 @@ class AzureGroupManager:
             return []
     
     def remove_owner(self, group_id: str, user_id: str) -> None:
-        """
-        Usuwa właściciela (owner) z grupy.
-        
-        DELETE /groups/{group_id}/owners/{user_id}/$ref
-        
-        Args:
-            group_id: GUID grupy
-            user_id: GUID użytkownika do usunięcia z owners
-        """
+        """Removes owner from group. Treats 404 (not found) as success."""
         try:
             resp = self._graph.delete(f"/groups/{group_id}/owners/{user_id}/$ref")
             if resp.status_code not in (204, 404):
-                # 204 – usunięto, 404 – już go tam nie było
                 resp.raise_for_status()
             logger.info(f"[remove_owner] Removed owner {user_id} from group {group_id}")
         except Exception as e:
             logger.warning(f"[remove_owner] Error removing owner {user_id} from group {group_id}: {e}")
-            # Nie rzucamy wyjątku - może owner już nie istnieje

@@ -1,5 +1,3 @@
-# main.py
-
 import logging
 from concurrent import futures
 
@@ -33,14 +31,12 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     """
     
     def __init__(self) -> None:
-        # Initialize managers
         self.user_manager = AzureUserManager()
         self.group_manager = AzureGroupManager()
         self.rbac_manager = AzureRBACManager()
         self.resource_finder = ResourceFinder()
         self.resource_deleter = ResourceDeleter()
         
-        # Initialize handlers
         self.identity_handler = IdentityHandlers(
             user_manager=self.user_manager,
             group_manager=self.group_manager,
@@ -54,8 +50,6 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             resource_finder=self.resource_finder,
             resource_deleter=self.resource_deleter,
         )
-    
-    # ========== Identity Management Methods ==========
     
     def GetStatus(self, request, context):
         """Health check endpoint."""
@@ -76,8 +70,6 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def RemoveGroup(self, request, context):
         """Remove group and all its members."""
         return self.identity_handler.remove_group(request, context)
-    
-    # ========== Cost Monitoring Methods ==========
     
     def GetTotalCostForGroup(self, request, context):
         """Returns total cost for a group for the specified period."""
@@ -107,8 +99,6 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         """Returns monthly costs for last 6 months for a group."""
         return self.cost_handler.get_group_monthly_costs_last_6_months(request, context)
     
-    # ========== Resource Management Methods ==========
-    
     def GetAvailableServices(self, request, context):
         """Returns list of available resource types based on configured RBAC roles."""
         return self.resource_handler.get_available_services(request, context)
@@ -126,18 +116,13 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         return self.identity_handler.assign_policies(request, context)
     
     def UpdateGroupLeaders(self, request, context):
-        """
-        Updates leaders for an existing group (synchronizes: removes old, adds new).
-        
-        NOTE: Currently uses CreateGroupWithLeadersRequest/Response from protobuf.
-        In the future, a dedicated UpdateGroupLeadersRequest/Response should be added to protobuf.
-        """
+        """Updates leaders for an existing group (synchronizes: removes old, adds new)."""
         return self.identity_handler.update_group_leaders(request, context)
 
 
 def serve():
-    """Start the gRPC server."""
-    validate_config()  # sprawdzi zmienne środowiskowe
+    """Starts the gRPC server."""
+    validate_config()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     pb2_grpc.add_CloudAdapterServicer_to_server(CloudAdapterServicer(), server)

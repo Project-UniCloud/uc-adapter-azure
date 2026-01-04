@@ -1,8 +1,7 @@
 # azure_clients.py
 """
-Centralny moduł trzymający klientów do usług Azure, używany w całym adapterze.
-
-Analogiczna libka z AWS  boto3.client(...)
+Central Azure service client factory module.
+Provides cached client instances for Graph API, Resource Manager, Compute, and Cost Management.
 """
 
 from functools import lru_cache
@@ -21,34 +20,17 @@ from config.settings import (
 )
 
 
-# =========================
-#  Walidacja HTTPS
-# =========================
-
 def _validate_https_url(url: str) -> None:
-    """
-    Waliduje że URL używa HTTPS. Rzuca ValueError jeśli nie.
-    
-    Args:
-        url: URL do walidacji
-    
-    Raises:
-        ValueError: Jeśli URL nie zaczyna się od https://
-    """
+    """Validates that URL uses HTTPS. Raises ValueError if not."""
     if not url.startswith("https://"):
         raise ValueError(f"URL must use HTTPS: {url}")
 
 
 def _validate_scope(scope: str) -> None:
     """
-    Waliduje że scope ma prawidłowy format (zaczyna się od /subscriptions/).
-    Rzuca ValueError jeśli nie.
+    Validates scope format (must start with /subscriptions/).
     
-    Args:
-        scope: Scope do walidacji (np. "/subscriptions/{subscription_id}")
-    
-    Raises:
-        ValueError: Jeśli scope nie zaczyna się od /subscriptions/ lub zawiera http://
+    Raises ValueError if scope is invalid or contains http://.
     """
     if not scope.startswith("/subscriptions/"):
         raise ValueError(f"Scope must start with '/subscriptions/': {scope}")
@@ -56,16 +38,9 @@ def _validate_scope(scope: str) -> None:
         raise ValueError(f"Scope must not contain http:// (use HTTPS): {scope}")
 
 
-# =========================
-#  Wspólne poświadczenia
-# =========================
-
 @lru_cache(maxsize=1)
 def get_credential() -> ClientSecretCredential:
-    """
-    Zwraca współdzielony obiekt ClientSecretCredential oparty na wartościach z config/settings.py
-    (tenant id, client id, client secret).
-    """
+    """Returns shared ClientSecretCredential instance from config settings."""
     return ClientSecretCredential(
         tenant_id=AZURE_TENANT_ID,
         client_id=AZURE_CLIENT_ID,
@@ -73,34 +48,22 @@ def get_credential() -> ClientSecretCredential:
     )
 
 
-# =========================
-#  Klient Microsoft Graph
-# =========================
-
 @lru_cache(maxsize=1)
 def get_graph_client() -> GraphClient:
-    """
-    Klient Microsoft Graph, wykorzystywany w identity/user_manager.py i identity/group_manager.py.
-    """
+    """Returns Microsoft Graph API client for identity management operations."""
     credential = get_credential()
     scopes = ["https://graph.microsoft.com/.default"]
     return GraphClient(credential=credential, scopes=scopes)
 
 
-# =========================
-#  Resource Manager (ARM)
-# =========================
-
 @lru_cache(maxsize=1)
 def get_resource_client() -> ResourceManagementClient:
     """
-    Klient ResourceManagementClient – odpowiednik boto3.client('ec2') / 'resourcegroupstaggingapi'
-   pozwala zarządzać resource groupami i zasobami.
+    Returns Azure Resource Manager client for resource groups and resource management.
     
-    Wymusza walidację że subscription_id nie zawiera http:// (Azure SDK domyślnie używa HTTPS).
+    Validates subscription ID does not contain http:// (Azure SDK uses HTTPS by default).
     """
     credential = get_credential()
-    # Walidacja że subscription_id nie zawiera http:// (Azure SDK używa HTTPS domyślnie)
     if "http://" in str(AZURE_SUBSCRIPTION_ID).lower():
         raise ValueError(f"Subscription ID must not contain http://: {AZURE_SUBSCRIPTION_ID}")
     return ResourceManagementClient(credential, AZURE_SUBSCRIPTION_ID)
@@ -109,13 +72,11 @@ def get_resource_client() -> ResourceManagementClient:
 @lru_cache(maxsize=1)
 def get_compute_client() -> ComputeManagementClient:
     """
-    ComputeManagementClient – operacje na VM-kach itp.
-    Przyda się później przy clean-upie / terminowaniu VMów.
+    Returns Azure Compute Management client for VM operations.
     
-    Wymusza walidację że subscription_id nie zawiera http:// (Azure SDK domyślnie używa HTTPS).
+    Validates subscription ID does not contain http://.
     """
     credential = get_credential()
-    # Walidacja że subscription_id nie zawiera http://
     if "http://" in str(AZURE_SUBSCRIPTION_ID).lower():
         raise ValueError(f"Subscription ID must not contain http://: {AZURE_SUBSCRIPTION_ID}")
     return ComputeManagementClient(credential, AZURE_SUBSCRIPTION_ID)
@@ -124,18 +85,15 @@ def get_compute_client() -> ComputeManagementClient:
 @lru_cache(maxsize=1)
 def get_cost_client() -> CostManagementClient:
     """
-    Cost Management – zapytania o koszty subskrypcji (odpowiednik AWS Cost Explorer).
-    Będzie używany w cost_monitoring/limit_manager.py.
+    Returns Azure Cost Management client for subscription cost queries.
     
-    Wymusza HTTPS endpoint, aby uniknąć błędu "Bearer token authentication is not permitted for non-TLS".
+    Enforces HTTPS endpoint to avoid "Bearer token authentication is not permitted for non-TLS" errors.
     """
     import logging
     logger = logging.getLogger(__name__)
     
     credential = get_credential()
-    # Wymuszamy HTTPS endpoint - domyślnie management.azure.com używa HTTPS, ale lepiej być explicite
     base_url = "https://management.azure.com"
-    _validate_https_url(base_url)  # Walidacja że base_url używa HTTPS
+    _validate_https_url(base_url)
     logger.info(f"[get_cost_client] Initializing CostManagementClient with base_url: {base_url}")
-    # subscription_id podajesz później jako scope w zapytaniu
     return CostManagementClient(credential=credential, base_url=base_url)
