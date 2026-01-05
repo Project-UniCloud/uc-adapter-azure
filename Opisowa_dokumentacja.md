@@ -1022,20 +1022,6 @@ RESOURCE_TYPE_ROLES = {
 
 **Azure**: Bardziej szczegółowy health check, łatwiejszy w debugowaniu.
 
-### 7.9. Podsumowanie różnic
-
-| Kategoria | Azure Adapter | AWS Adapter |
-|-----------|---------------|-------------|
-| **Architektura** | ✅ Modułowa (handlery) | ⚠️ Monolityczna |
-| **Uprawnienia** | ⚠️ Wbudowane role (mniej elastyczne) | ✅ Custom policies (bardziej elastyczne) |
-| **Replikacja** | ⚠️ Opóźniona (wymaga retry) | ✅ Natychmiastowa |
-| **Auto-tagging** | ❌ Niezaimplementowane | ✅ Lambda function |
-| **Health Check** | ✅ Szczegółowy | ⚠️ Binarny |
-| **Biblioteki** | ⚠️ Więcej (7 Azure SDK) | ✅ Mniej (boto3) |
-| **Wersje gRPC** | ✅ Nowsze (1.76.0+) | ⚠️ Starsze (1.71.0) |
-
----
-
 ## 8. Deployment i środowisko produkcyjne
 
 ### 8.1. Wymagania systemowe
@@ -1150,26 +1136,7 @@ docker run -d \
 
 ---
 
-## 10. Podsumowanie
-
-Azure Cloud Adapter jest kompleksowym komponentem integracyjnym systemu UniCloud, zapewniającym:
-
-✅ **Spójny interfejs gRPC** dla operacji Azure (identyczny z AWS adapterem)  
-✅ **Zarządzanie tożsamościami** w Microsoft Entra ID (użytkownicy, grupy)  
-✅ **Kontrola dostępu RBAC** z automatycznym przypisywaniem ról  
-✅ **Monitorowanie kosztów** z podziałem na grupy i usługi  
-✅ **Zarządzanie cyklem życia zasobów** (wyszukiwanie, usuwanie po tagach)  
-✅ **Architektura modułowa** z wyraźnym podziałem odpowiedzialności  
-✅ **Obsługa eventual consistency** Azure AD przez retry logic  
-✅ **Deployment kontenerowy** z automatyzacją CI/CD  
-
-Adapter jest gotowy do użycia produkcyjnego i został przetestowany w środowisku UniCloud.
-
----
-
----
-
-## 11. Instrukcja konfiguracji Azure/Entra ID (zastępuje PDF)
+## 10. Instrukcja konfiguracji Azure/Entra ID (zastępuje PDF)
 
 ### Cel
 Celem jest przygotowanie tożsamości aplikacji (Service Principal) w Microsoft Entra ID oraz nadanie jej:
@@ -1240,9 +1207,4 @@ Co najmniej:
 - Czy `<AZURE_SUBSCRIPTION_ID>` wskazuje subskrypcję z poprawnie nadanymi rolami?
 
 ---
-
-**Data utworzenia raportu**: 2025-01-XX  
-**Ostatnia aktualizacja**: 2025-01-XX  
-**Wersja adaptera**: 1.0  
-**Autor**: System UniCloud
 

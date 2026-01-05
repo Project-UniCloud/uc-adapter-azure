@@ -1,11 +1,10 @@
 # identity/resource_tagging.py
 
 """
-Mechanizm tagowania zasobów Azure z tagiem Group.
-Odpowiednik AWS auto-tagging, ale dla Azure.
+Resource tagging mechanism for Azure resources with Group tag.
 
-Uwaga: Tagowanie wymaga uprawnień do modyfikacji zasobów.
-Może być wywoływane przez użytkowników z odpowiednimi rolami (np. Tag Contributor).
+Note: Tagging requires permissions to modify resources.
+Can be called by users with appropriate roles (e.g. Tag Contributor).
 """
 
 import logging
