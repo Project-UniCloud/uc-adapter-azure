@@ -88,7 +88,11 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         return self.cost_handler.get_group_cost_with_service_breakdown(request, context)
     
     def GetTotalCostWithServiceBreakdown(self, request, context):
-        """Returns total Azure cost with service breakdown."""
+        """
+        Returns total Azure cost with service breakdown.
+        DEPRECATED: This method is not in the latest proto specification.
+        Consider using GetGroupCostWithServiceBreakdown instead.
+        """
         return self.cost_handler.get_total_cost_with_service_breakdown(request, context)
     
     def GetGroupCostsLast6MonthsByService(self, request, context):
@@ -115,8 +119,27 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         """Assigns RBAC policies to a group or user."""
         return self.identity_handler.assign_policies(request, context)
     
+    def AddLeaderToGroup(self, request, context):
+        """Adds a leader to an existing group."""
+        return self.identity_handler.add_leader_to_group(request, context)
+    
+    def DeleteUser(self, request, context):
+        """Deletes a user from Azure AD."""
+        return self.identity_handler.delete_user(request, context)
+    
+    def GetGroupResourcesList(self, request, context):
+        """Returns a detailed list of resources for a given group."""
+        return self.resource_handler.get_group_resources_list(request, context)
+    
+    def DeleteResource(self, request, context):
+        """Deletes a single Azure resource by its resource_global_id."""
+        return self.resource_handler.delete_resource(request, context)
+    
     def UpdateGroupLeaders(self, request, context):
-        """Updates leaders for an existing group (synchronizes: removes old, adds new)."""
+        """
+        Updates leaders for an existing group (synchronizes: removes old, adds new).
+        DEPRECATED: Use AddLeaderToGroup instead for adding individual leaders.
+        """
         return self.identity_handler.update_group_leaders(request, context)
 
 

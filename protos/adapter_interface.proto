@@ -2,42 +2,89 @@ syntax = "proto3";
 
 package adapter;
 
-// === CloudAdapter Service Definition ===
+// =============================================================================
+// SERVICE DEFINITION
+// =============================================================================
 service CloudAdapter {
+
+  // --- Section 1: Health & Configuration ---
+  // Checks if the system (AWS/Local) is operational and lists available services
   rpc GetStatus(StatusRequest) returns (StatusResponse);
   rpc GetAvailableServices(GetAvailableServicesRequest) returns (GetAvailableServicesResponse);
-  rpc CreateGroupWithLeaders(CreateGroupWithLeadersRequest) returns (GroupCreatedResponse);
-  rpc CreateUsersForGroup(CreateUsersForGroupRequest) returns (CreateUsersForGroupResponse);
+
+  // --- Section 2: Identity Management (Groups, Users, Policies) ---
+  // Group creation, adding users/leaders, assigning policies, and account deletion
   rpc GroupExists(GroupExistsRequest) returns (GroupExistsResponse);
+  rpc CreateGroupWithLeaders(CreateGroupWithLeadersRequest) returns (GroupCreatedResponse);
+  rpc AddLeaderToGroup (AddLeaderToGroupRequest) returns (AddLeaderToGroupResponse);
+  rpc CreateUsersForGroup(CreateUsersForGroupRequest) returns (CreateUsersForGroupResponse);
+  rpc AssignPolicies(AssignPoliciesRequest) returns (AssignPoliciesResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  rpc RemoveGroup(RemoveGroupRequest) returns (RemoveGroupResponse);
+
+  // --- Section 3: Resource Management ---
+  // Resource management: listing, counting, and cleanup
+  rpc GetGroupResourcesList (GetGroupResourcesListRequest) returns (GetGroupResourcesListResponse);
   rpc GetResourceCount(ResourceCountRequest) returns (ResourceCountResponse);
-  rpc GetTotalCostForGroup(CostRequest) returns (CostResponse);
+  rpc DeleteResource(DeleteResourceRequest) returns (DeleteResourceResponse);
+  rpc CleanupGroupResources(CleanupGroupRequest) returns (CleanupGroupResponse);
+
+  // --- Section 4: Cost Monitoring ---
+  // Cost reports: global, per group, historical trends, and service breakdowns
+  rpc GetTotalCost(CostRequest) returns (CostResponse); // Global AWS Cost
   rpc GetTotalCostsForAllGroups(CostRequest) returns (AllGroupsCostResponse);
-  rpc GetTotalCost(CostRequest) returns (CostResponse);
+  rpc GetTotalCostForGroup(CostRequest) returns (CostResponse);
   rpc GetGroupCostWithServiceBreakdown(GroupServiceBreakdownRequest) returns (GroupServiceBreakdownResponse);
-  rpc GetTotalCostWithServiceBreakdown(CostRequest) returns (GroupServiceBreakdownResponse);
   rpc GetGroupCostsLast6MonthsByService(GroupLast6MonthsCostRequest) returns (GroupCostMapResponse);
   rpc GetGroupMonthlyCostsLast6Months(GroupLast6MonthsCostRequest) returns (GroupMonthlyCostsResponse);
-  rpc AssignPolicies(AssignPoliciesRequest) returns (AssignPoliciesResponse);
-  rpc RemoveGroup(RemoveGroupRequest) returns (RemoveGroupResponse);
-  rpc CleanupGroupResources(CleanupGroupRequest) returns (CleanupGroupResponse);
 }
 
-// === Health Check ===
+// =============================================================================
+// MESSAGES: Section 1 - Health & Configuration
+// =============================================================================
+
 message StatusRequest {}
 
 message StatusResponse {
   bool isHealthy = 1;
 }
 
-// === Group Management ===
+message GetAvailableServicesRequest {}
+
+message GetAvailableServicesResponse {
+  repeated string services = 1;
+}
+
+// =============================================================================
+// MESSAGES: Section 2 - Identity Management
+// =============================================================================
+
+message GroupExistsRequest {
+  string groupName = 1;
+}
+
+message GroupExistsResponse {
+  bool exists = 1;
+}
+
 message CreateGroupWithLeadersRequest {
-  repeated string resourceTypes = 1;  // Changed from resourceType to resourceTypes (repeated) for backend compatibility
+  repeated string resourceTypes = 1;
   repeated string leaders = 2;
   string groupName = 3;
 }
 
 message GroupCreatedResponse {
   string groupName = 1;
+}
+
+message AddLeaderToGroupRequest {
+    string group_name = 1;
+    string leader_name = 2;
+}
+
+message AddLeaderToGroupResponse {
+    bool success = 1;
+    string message = 2;
 }
 
 message CreateUsersForGroupRequest {
@@ -49,15 +96,95 @@ message CreateUsersForGroupResponse {
   string message = 1;
 }
 
-message GroupExistsRequest {
+message AssignPoliciesRequest {
+  repeated string resourceTypes = 1; // e.g. ["s3", "dynamodb"]
+  string groupName = 2;              // Optional (if target is a student group)
+  string userName = 3;               // Optional (if target is a specific user)
+}
+
+message AssignPoliciesResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message DeleteUserRequest {
+  string user_name = 1;
+  string group_name = 2;
+}
+
+message DeleteUserResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RemoveGroupRequest {
   string groupName = 1;
 }
 
-message GroupExistsResponse {
-  bool exists = 1;
+message RemoveGroupResponse {
+  bool success = 1;
+  repeated string removedUsers = 2;
+  string message = 3;
 }
 
-// === Cost Queries ===
+// =============================================================================
+// MESSAGES: Section 3 - Resource Management
+// =============================================================================
+
+message GetGroupResourcesListRequest {
+    string groupName = 1;
+}
+
+message ResourceDetail {
+    string resource_global_id = 1;
+    string name = 2;        // From 'Name' tag
+    string type = 3;        // e.g. EC2 Instance, S3 Bucket
+    string service = 4;     // e.g. ec2, s3
+    string created_by = 5;  // From 'CreatedBy' or 'User' tag
+    string resource_id = 6; // Short ID (e.g. i-12345)
+    string status = 7;      // Provider-specific status (e.g., running, stopped, Active, available)
+}
+
+message GetGroupResourcesListResponse {
+    bool success = 1;
+    repeated ResourceDetail resources = 2;
+    string message = 3;
+}
+
+message ResourceCountRequest {
+  string groupName = 1;
+  string resourceType = 2;
+}
+
+message ResourceCountResponse {
+  int32 count = 1;
+}
+
+message DeleteResourceRequest {
+  string resource_global_id = 1;
+}
+
+message DeleteResourceResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CleanupGroupRequest {
+  string groupName = 1;
+  bool force = 2;
+}
+
+message CleanupGroupResponse {
+  bool success = 1;
+  repeated string deletedResources = 2;
+  string message = 3;
+}
+
+// =============================================================================
+// MESSAGES: Section 4 - Cost Monitoring
+// =============================================================================
+
+// Common request for simple cost queries
 message CostRequest {
   string startDate = 1;
   string endDate = 2;
@@ -77,7 +204,7 @@ message AllGroupsCostResponse {
   repeated GroupCost groupCosts = 1;
 }
 
-// === Detailed Breakdown ===
+// Service Breakdown
 message GroupServiceBreakdownRequest {
   string groupName = 1;
   string startDate = 2;
@@ -94,75 +221,15 @@ message GroupServiceBreakdownResponse {
   repeated ServiceCost breakdown = 2;
 }
 
-// === Service Discovery ===
-message GetAvailableServicesRequest {}
-
-message GetAvailableServicesResponse {
-  repeated string services = 1;
-}
-
-// === Resource Counting ===
-message ResourceCountRequest {
-  string groupName = 1;
-  string resourceType = 2;
-}
-
-message ResourceCountResponse {
-  int32 count = 1;
-}
-
-// === Group Removal ===
-message RemoveGroupRequest {
-  string groupName = 1;
-}
-
-message RemoveGroupResponse {
-  bool success = 1;
-  repeated string removedUsers = 2;
-  string message = 3;
-}
-
-// === Resource Cleanup ===
-message CleanupGroupRequest {
-  string groupName = 1;
-  bool force = 2;
-}
-
-message CleanupGroupResponse {
-  bool success = 1;
-  repeated string deletedResources = 2;
-  string message = 3;
-}
-
-// === Historical Cost Queries ===
+// Historical Data (Last 6 Months)
 message GroupLast6MonthsCostRequest {
   string groupName = 1;
 }
 
-message GroupCostMapRequest {
-  string groupName = 1;
-}
-
 message GroupCostMapResponse {
-  map<string, double> costs = 1;
-}
-
-message GroupMonthlyCostsRequest {
-  string groupName = 1;
+  map<string, double> costs = 1; // e.g. {"ec2": 1002.23, "s3": 13.30}
 }
 
 message GroupMonthlyCostsResponse {
   map<string, double> monthCosts = 1;
-}
-
-// === Policy Assignment ===
-message AssignPoliciesRequest {
-  repeated string resourceTypes = 1;
-  string groupName = 2;  // optional
-  string userName = 3;   // optional
-}
-
-message AssignPoliciesResponse {
-  bool success = 1;
-  string message = 2;
 }

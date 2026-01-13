@@ -779,6 +779,54 @@ class IdentityHandlers:
             response.message = str(e)
             return response
     
+    def delete_user(self, request, context):
+        """
+        Deletes a user from Azure AD.
+        
+        Constructs the full username with group suffix (matches AWS adapter format).
+        """
+        user_name: str = request.user_name
+        group_name: str = request.group_name
+        
+        # Normalize group name (same logic as used during creation)
+        normalized_group = normalize_name(group_name)
+        
+        # Construct the full username with group suffix
+        # Format: {user_name}-{normalized_group}@domain
+        username_with_suffix = build_username_with_group_suffix(user_name, group_name)
+        
+        logger.info(
+            f"[DeleteUser] Request to delete user '{username_with_suffix}' "
+            f"(Base: '{user_name}', Group: '{normalized_group}')"
+        )
+        
+        try:
+            # Delete the user
+            self.user_manager.delete_user(username_with_suffix)
+            
+            response = pb2.DeleteUserResponse()
+            response.success = True
+            response.message = f"User '{username_with_suffix}' deleted successfully"
+            logger.info(f"[DeleteUser] Successfully deleted user '{username_with_suffix}'")
+            return response
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "404" in error_msg or "not found" in error_msg:
+                logger.warning(f"[DeleteUser] User '{username_with_suffix}' not found")
+                response = pb2.DeleteUserResponse()
+                response.success = False
+                response.message = f"User '{username_with_suffix}' not found"
+                return response
+            else:
+                logger.error(f"[DeleteUser] Error deleting user '{username_with_suffix}': {e}", exc_info=True)
+                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_details(str(e))
+                response = pb2.DeleteUserResponse()
+                response.success = False
+                response.message = str(e)
+                return response
+    
     def assign_policies(self, request, context):
         """
         Assigns RBAC policies to a group or user.
@@ -907,12 +955,96 @@ class IdentityHandlers:
             context.set_details(str(e))
             return pb2.AssignPoliciesResponse(success=False, message=f"Internal error: {str(e)}")
     
+    def add_leader_to_group(self, request, context):
+        """
+        Adds a leader to an existing group.
+        
+        Creates the user if needed, adds as member and owner of the group.
+        Similar to update_group_leaders but simpler - only adds, doesn't remove.
+        """
+        group_name: str = request.group_name
+        leader_name: str = request.leader_name
+        normalized_group_name = normalize_name(group_name)
+        
+        try:
+            # Check if group exists
+            group = self.group_manager.get_group_by_name(normalized_group_name)
+            if not group:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details(f"Group '{normalized_group_name}' does not exist")
+                response = pb2.AddLeaderToGroupResponse()
+                response.success = False
+                response.message = f"Group '{normalized_group_name}' does not exist"
+                return response
+            
+            group_id = group["id"]
+            username_with_suffix = build_username_with_group_suffix(leader_name, group_name)
+            
+            # Check if user already exists
+            user = self.user_manager.get_user(username_with_suffix)
+            if user:
+                leader_id = user.get("id")
+                logger.info(
+                    f"[AddLeaderToGroup] User '{leader_name}' already exists, using existing user"
+                )
+            else:
+                # Create user
+                leader_id = self.user_manager.create_user(
+                    login=leader_name,
+                    display_name=username_with_suffix,
+                    group_name=group_name,
+                )
+                logger.info(
+                    f"[AddLeaderToGroup] Created user '{leader_name}' for group '{normalized_group_name}'"
+                )
+            
+            # Add to members (if not already a member)
+            try:
+                self.group_manager.add_member(group_id, leader_id)
+            except Exception as e:
+                # May already be a member - that's OK
+                if "already" not in str(e).lower() and "already a member" not in str(e).lower():
+                    logger.warning(
+                        f"[AddLeaderToGroup] Could not add '{leader_name}' to members: {e}"
+                    )
+            
+            # Add as owner
+            try:
+                self.group_manager.add_owner(group_id, leader_id)
+                logger.info(
+                    f"[AddLeaderToGroup] Added '{leader_name}' as owner of group '{normalized_group_name}'"
+                )
+            except Exception as e:
+                # May already be an owner - that's OK
+                if "already" not in str(e).lower():
+                    logger.warning(
+                        f"[AddLeaderToGroup] Could not add '{leader_name}' as owner: {e}"
+                    )
+            
+            response = pb2.AddLeaderToGroupResponse()
+            response.success = True
+            response.message = f"Leader '{leader_name}' successfully added to group '{normalized_group_name}'"
+            logger.info(
+                f"[AddLeaderToGroup] Successfully added leader '{leader_name}' to group '{normalized_group_name}'"
+            )
+            return response
+            
+        except Exception as e:
+            logger.error(f"[AddLeaderToGroup] Error: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            response = pb2.AddLeaderToGroupResponse()
+            response.success = False
+            response.message = str(e)
+            return response
+    
     def update_group_leaders(self, request, context):
         """
         Synchronizes leaders for existing group.
         
         Performs full sync: removes old leaders, adds new ones.
         Currently uses CreateGroupWithLeadersRequest/Response from protobuf.
+        DEPRECATED: Use AddLeaderToGroup instead for adding individual leaders.
         """
         group_name: str = request.groupName
         resource_types: List[str] = list(request.resourceTypes)
