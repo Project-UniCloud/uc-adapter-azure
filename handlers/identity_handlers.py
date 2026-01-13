@@ -319,7 +319,15 @@ class IdentityHandlers:
         resource_types: List[str] = list(request.resourceTypes)
         leaders: List[str] = list(request.leaders)
         
-        resource_type: str = resource_types[0] if resource_types else ""
+        # Validation: both leaders and resourceTypes must be provided (matches AWS adapter behavior)
+        if not leaders or not resource_types:
+            msg = "Leaders list and Resource Types list cannot be empty."
+            logger.warning(f"[CreateGroupWithLeaders] Validation failed: {msg}")
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(msg)
+            return pb2.GroupCreatedResponse()
+        
+        resource_type: str = resource_types[0]
 
         normalized_group_name = normalize_name(group_name)
 
@@ -330,39 +338,27 @@ class IdentityHandlers:
             )
             created_leaders: List[tuple[str, str]] = []
 
-            # Assign RBAC role only if resource_type is provided and valid
-            if resource_type and resource_type in self.rbac_manager.RESOURCE_TYPE_ROLES:
-                try:
-                    success, reason = self.rbac_manager.assign_role_to_group(
-                        resource_type=resource_type,
-                        group_id=group_id,
-                    )
-                    if success:
-                        logger.info(
-                            f"[CreateGroupWithLeaders] Assigned RBAC role for resource type '{resource_type}' "
-                            f"to group '{normalized_group_name}'"
-                        )
-                    else:
-                        logger.warning(
-                            f"[CreateGroupWithLeaders] RBAC role assignment for resource type '{resource_type}' "
-                            f"to group '{normalized_group_name}' failed: {reason}"
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"[CreateGroupWithLeaders] Exception assigning RBAC role for resource type '{resource_type}' "
-                        f"to group '{normalized_group_name}': {e}",
-                        exc_info=True
-                    )
-            else:
-                if resource_types:
-                    logger.warning(
-                        f"[CreateGroupWithLeaders] No RBAC role assignment: invalid or empty resource type. "
-                        f"Provided: {resource_types}, available types: {list(self.rbac_manager.RESOURCE_TYPE_ROLES.keys())}"
+            try:
+                success, reason = self.rbac_manager.assign_role_to_group(
+                    resource_type=resource_type,
+                    group_id=group_id,
+                )
+                if success:
+                    logger.info(
+                        f"[CreateGroupWithLeaders] Assigned RBAC role for resource type '{resource_type}' "
+                        f"to group '{normalized_group_name}'"
                     )
                 else:
-                    logger.info(
-                        f"[CreateGroupWithLeaders] No resource types provided - creating group without RBAC role assignment"
+                    logger.warning(
+                        f"[CreateGroupWithLeaders] RBAC role assignment for resource type '{resource_type}' "
+                        f"to group '{normalized_group_name}' failed: {reason}"
                     )
+            except Exception as e:
+                logger.warning(
+                    f"[CreateGroupWithLeaders] Exception assigning RBAC role for resource type '{resource_type}' "
+                    f"to group '{normalized_group_name}': {e}",
+                    exc_info=True
+                )
 
             for leader_login in leaders:
                 username_with_suffix = build_username_with_group_suffix(
