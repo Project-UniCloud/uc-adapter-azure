@@ -64,7 +64,7 @@ Adapter wykorzystuje wzorzec **Handler Pattern**, gdzie główny serwer gRPC (`C
 
 ### 3.1. Pliki główne
 
-#### `main.py` (~137 linii)
+#### `main.py`
 **Rola**: Punkt wejścia aplikacji, inicjalizacja serwera gRPC.
 
 **Kluczowe komponenty**:
@@ -221,7 +221,7 @@ def __init__(self):
 
 ### 3.4. Zarządzanie tożsamościami
 
-#### `identity/user_manager.py` (158 linii)
+#### `identity/user_manager.py`
 **Rola**: Zarządzanie użytkownikami w Azure AD przez Microsoft Graph API.
 
 **Metody**:
@@ -230,11 +230,26 @@ def __init__(self):
 - `get_user(login_or_upn)` - pobiera dane użytkownika
 - `reset_password(login_or_upn, new_password)` - resetuje hasło
 
-**Funkcje pomocnicze**:
-- `_login_to_upn(login)` - konwertuje login na UPN (User Principal Name)
-- `_generate_initial_password(group_name)` - generuje hasło zgodne z polityką Azure AD
+**Funkcje pomocnicze (istotne fragmenty)**:
 
-#### `identity/group_manager.py` (~439 linii)
+- `_login_to_upn(login)` – konwertuje login na UPN (User Principal Name), pilnując limitu 64 znaków w części lokalnej.
+- `_generate_initial_password(group_name)` – generuje hasło startowe na podstawie nazwy grupy:
+
+  - jeśli `group_name` jest podane:
+    - `base = normalize_name(group_name)` – np. `"Azure test 2025Z" → "Azure-test-2025Z"`,
+    - jeżeli `len(base) < 6`, to `base += "Group"`,
+    - hasło: `f"{base}A1!"`.
+  - jeśli `group_name` nie jest podane:
+    - używane jest domyślne `base = "TempPassw0rd"` → `"TempPassw0rdA1!"`.
+
+Przykład dla studenta:
+- `login = "s123456"`,
+- `group_name = "Azure test 2025Z"`,
+- `normalized_group = "Azure-test-2025Z"`,
+- username/UPN lokalnie: `s123456-Azure-test-2025Z`,
+- hasło startowe: `Azure-test-2025ZA1!` (przy pierwszym logowaniu Entra wymusi zmianę hasła).
+
+#### `identity/group_manager.py`
 **Rola**: Zarządzanie grupami w Azure AD przez Microsoft Graph API.
 
 **Metody główne**:
@@ -255,7 +270,13 @@ def __init__(self):
 
 **Mechanizm retry**: Metody `add_member` i `add_owner` implementują retry logic (5 prób, 3s opóźnienie) dla obsługi opóźnionej replikacji Azure AD.
 
-**Resource Group**: Automatycznie tworzy Resource Group dla każdej grupy (fallback dla cleanup jeśli tagowanie nie działa).
+**Resource Group / mapowanie na zasoby**:
+- dla każdej grupy Entra (np. `Azure-test-2025Z`) adapter może **opcjonalnie** utworzyć Resource Group:
+  - nazwa: `rg-{normalized_name}`, np. `rg-Azure-test-2025Z`,
+  - tag: `Group = normalized_name`, np. `Group = Azure-test-2025Z`.
+- Resource Group służy jako **fallback** przy sprzątaniu:
+  - główny mechanizm cleanupu i raportowania opiera się na tagu `Group` na zasobach,
+  - jeżeli tagi nie są konsekwentnie ustawione, ostatnią deską ratunku jest usunięcie całej `rg-{group}`.
 
 #### `identity/rbac_manager.py` (~443 linie)
 **Rola**: Zarządzanie przypisaniami ról RBAC w Azure.
@@ -297,7 +318,7 @@ RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]  # Kolejność przypisywania 
 - `normalize_name(name)` - normalizuje nazwy (spaces/underscores → dashes, polskie znaki → ASCII)
 - `build_username_with_group_suffix(user_login, group_name)` - buduje username z suffixem grupy (format: `{login}-{normalized_group}`)
 
-#### `identity/resource_tagging.py` (76 linii)
+#### `identity/resource_tagging.py`
 **Rola**: Mechanizm tagowania zasobów Azure z tagiem `Group` (odpowiednik AWS auto-tagging).
 
 **Funkcje**:
@@ -307,11 +328,14 @@ RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]  # Kolejność przypisywania 
   - Wymaga uprawnień do modyfikacji zasobów (np. rola Tag Contributor)
   - Zwraca `True` jeśli tagowanie się powiodło
 
-**Uwaga**: Tagowanie może być wywoływane przez użytkowników z odpowiednimi rolami. Nie jest automatyczne (wymaga Azure Policy lub ręcznego wywołania).
+**Uwaga**: Tagowanie nie jest automatyczne – zasoby tworzone ręcznie (np. z portalu) nie dziedziczą tagów z Resource Group.  
+Wymagane jest:
+- ręczne dodanie tagu `Group=<normalized_group>` do zasobów, **lub**
+- użycie Azure Policy / dodatkowego mechanizmu auto‑tagowania.
 
 ### 3.5. Zarządzanie zasobami
 
-#### `clean_resources/resource_finder.py` (122 linie)
+#### `clean_resources/resource_finder.py`
 **Rola**: Wyszukiwanie zasobów Azure na podstawie tagów.
 
 **Metody**:
@@ -323,7 +347,7 @@ RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]  # Kolejność przypisywania 
 **Funkcje pomocnicze**:
 - `_extract_service_name(resource_type)` - ekstrahuje krótką nazwę usługi z pełnego typu zasobu Azure (np. `Microsoft.Compute/virtualMachines` → `vm`)
 
-#### `clean_resources/resource_deleter.py` (111 linii)
+#### `clean_resources/resource_deleter.py`
 **Rola**: Usuwanie zasobów Azure na podstawie typu.
 
 **Metody**:
@@ -340,7 +364,7 @@ RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]  # Kolejność przypisywania 
 
 ### 3.6. Monitorowanie kosztów
 
-#### `cost_monitoring/limit_manager.py` (752 linie)
+#### `cost_monitoring/limit_manager.py`
 **Rola**: Zarządzanie limitami zasobów i monitorowanie kosztów.
 
 **Klasa `LimitManager`**:
@@ -367,7 +391,7 @@ RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]  # Kolejność przypisywania 
 
 ### 3.7. Protobuf
 
-#### `protos/adapter_interface.proto` (~169 linii)
+#### `protos/adapter_interface.proto`
 **Rola**: Definicja interfejsu gRPC w formacie Protocol Buffers.
 
 **Service `CloudAdapter`** - definiuje metody RPC:
@@ -383,7 +407,7 @@ RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]  # Kolejność przypisywania 
 
 ### 3.8. Deployment i infrastruktura
 
-#### `Dockerfile` (31 linii)
+#### `Dockerfile`
 **Rola**: Definicja obrazu Docker dla adaptera.
 
 **Charakterystyka**:
@@ -398,7 +422,7 @@ RESOURCE_TYPE_ORDER = ["network", "storage", "vm"]  # Kolejność przypisywania 
 3. Zmiana właściciela na non-root user
 4. Uruchomienie jako non-root user
 
-#### `docker-compose.yml` (25 linii)
+#### `docker-compose.yml`
 **Rola**: Konfiguracja lokalnego środowiska deweloperskiego.
 
 **Konfiguracja**:
